@@ -1,0 +1,56 @@
+# Environment
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Data
+data/raw/*
+data/delta/*
+data/features/*
+!data/**/.gitkeep
+
+# ML Models
+models/**/*.pkl
+models/**/*.joblib
+models/**/*.h5
+models/**/*.pth
+mlruns/
+artifacts/
+
+# Logs
+*.log
+logs/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Docker
+docker-compose.override.yml
+
+# Secrets
+secrets/
+*.key
+*.pem

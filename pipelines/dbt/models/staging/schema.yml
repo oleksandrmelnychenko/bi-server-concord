@@ -1,0 +1,203 @@
+version: 2
+
+sources:
+  - name: delta_lake
+    description: Raw data from Delta Lake (synced from MSSQL ConcordDb_v5)
+
+    # Customer tables
+    tables:
+      - name: dbo_Client
+        description: Customer master data
+        external:
+          location: '/opt/dagster/app/data/delta/customer/dbo_Client'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key (UUID as string)
+            tests:
+              - unique
+              - not_null
+          - name: _ingested_at
+            description: Timestamp when data was ingested
+          - name: _source_table
+            description: Source table name
+
+      - name: dbo_ClientAgreement
+        description: Customer agreement data
+        external:
+          location: '/opt/dagster/app/data/delta/customer/dbo_ClientAgreement'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+          - name: ClientId
+            description: Foreign key to Client
+
+      # Product tables
+      - name: dbo_Product
+        description: Product master data (369,743 products)
+        external:
+          location: '/opt/dagster/app/data/delta/product/dbo_Product'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+            tests:
+              - unique
+              - not_null
+
+      - name: dbo_ProductAnalogue
+        description: Product alternatives/analogues (1.7M relationships)
+        external:
+          location: '/opt/dagster/app/data/delta/product/dbo_ProductAnalogue'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+          - name: ProductId
+            description: Foreign key to Product
+          - name: AnalogueId
+            description: Foreign key to analogue Product
+
+      - name: dbo_ProductPricing
+        description: Product pricing history (1.1M records)
+        external:
+          location: '/opt/dagster/app/data/delta/product/dbo_ProductPricing'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+          - name: ProductId
+            description: Foreign key to Product
+
+      - name: dbo_ProductCarBrand
+        description: Product to car brand mapping (262K records)
+        external:
+          location: '/opt/dagster/app/data/delta/product/dbo_ProductCarBrand'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+          - name: ProductId
+            description: Foreign key to Product
+
+      - name: dbo_ProductProductGroup
+        description: Product categorization (727K records)
+        external:
+          location: '/opt/dagster/app/data/delta/product/dbo_ProductProductGroup'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+          - name: ProductId
+            description: Foreign key to Product
+
+      - name: dbo_ProductOriginalNumber
+        description: OEM part numbers (669K records)
+        external:
+          location: '/opt/dagster/app/data/delta/product/dbo_ProductOriginalNumber'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+          - name: ProductId
+            description: Foreign key to Product
+
+      # Transaction tables
+      - name: dbo_Sale
+        description: Sales/orders (513 sales)
+        external:
+          location: '/opt/dagster/app/data/delta/transaction/dbo_Sale'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+            tests:
+              - unique
+              - not_null
+          - name: ClientId
+            description: Foreign key to Client
+
+      - name: dbo_OrderItem
+        description: Order line items (772 items)
+        external:
+          location: '/opt/dagster/app/data/delta/transaction/dbo_OrderItem'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+          - name: OrderId
+            description: Foreign key to Order/Sale
+          - name: ProductId
+            description: Foreign key to Product
+
+      - name: dbo_SupplyOrder
+        description: Supply orders (2,826 orders)
+        external:
+          location: '/opt/dagster/app/data/delta/transaction/dbo_SupplyOrder'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+
+      - name: dbo_SupplyOrderItem
+        description: Supply order items (16,563 items)
+        external:
+          location: '/opt/dagster/app/data/delta/transaction/dbo_SupplyOrderItem'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+          - name: SupplyOrderId
+            description: Foreign key to SupplyOrder
+          - name: ProductId
+            description: Foreign key to Product
+
+      - name: dbo_SaleInvoiceNumber
+        description: Sale invoice numbers (1,218 records)
+        external:
+          location: '/opt/dagster/app/data/delta/transaction/dbo_SaleInvoiceNumber'
+          file_format: delta
+        columns:
+          - name: Id
+            description: Primary key
+          - name: SaleId
+            description: Foreign key to Sale
+
+models:
+  # Staging models
+  - name: stg_customers
+    description: Cleaned and standardized customer data
+    columns:
+      - name: customer_id
+        description: Unique customer identifier
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_sales
+    description: Cleaned and standardized sales data
+    columns:
+      - name: sale_id
+        description: Unique sale identifier
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_products
+    description: Cleaned and standardized product data
+    columns:
+      - name: product_id
+        description: Unique product identifier
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_order_items
+    description: Cleaned and standardized order line items
+
+  - name: stg_product_analogues
+    description: Product alternative relationships
+
+  - name: stg_product_pricing
+    description: Product pricing history

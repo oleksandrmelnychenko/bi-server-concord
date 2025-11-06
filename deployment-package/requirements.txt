@@ -1,0 +1,25 @@
+# B2B Product Recommendation API - Production Dependencies
+
+# Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.4.2
+pydantic-settings==2.0.3
+
+# Database
+pymssql==2.2.10
+sqlalchemy==2.0.23
+
+# Caching
+redis==5.0.1
+
+# HTTP
+httpx==0.25.1
+requests==2.31.0
+
+# Utilities
+python-dotenv==1.0.0
+python-multipart==0.0.6
+
+# Logging & Monitoring
+structlog==23.2.0

@@ -1,0 +1,13 @@
+dagster==1.5.12
+dagster-webserver==1.5.12
+dagster-postgres==0.21.12
+dagster-docker==0.21.12
+dagster-pandas==0.21.12
+dagit==1.5.12
+pyodbc==5.0.1
+pymssql==2.2.11
+pandas==2.1.4
+deltalake==0.14.0
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+pydantic==2.5.3
