@@ -294,6 +294,8 @@ class ImprovedHybridRecommenderV32:
         """
         Get collaborative filtering scores for NEW products (not yet purchased by customer).
 
+        OPTIMIZED VERSION: Uses single SQL query with JOINs and aggregation instead of N+1 queries.
+
         Returns:
             Dict of {product_id: collaborative_score} for products customer hasn't bought
         """
@@ -305,67 +307,51 @@ class ImprovedHybridRecommenderV32:
             return {}
 
         # Get target customer's products (to exclude from recommendations)
-        target_products = self.get_customer_products(customer_id, as_of_date)
+        target_products = self.get_customer_products(customer_id, as_of_date, limit=5000)
+        target_product_ids = ','.join(str(pid) for pid in target_products) if target_products else '0'
 
-        # Get products bought by similar customers
-        similar_customer_ids = ','.join(str(cid) for cid, _ in similar_customers)
+        # Create temporary table with similarity scores in SQL
+        # Format: (customer_id, similarity_score)
+        similarity_values = ','.join(f"({cid}, {sim})" for cid, sim in similar_customers)
 
+        # OPTIMIZED: Single query with CTEs and aggregation
         query = f"""
-        SELECT oi.ProductID, COUNT(DISTINCT ca.ClientID) as customer_count
-        FROM dbo.ClientAgreement ca
-        INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
-        INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-        WHERE ca.ClientID IN ({similar_customer_ids})
-              AND o.Created < '{as_of_date}'
-              AND oi.ProductID IS NOT NULL
-        GROUP BY oi.ProductID
+        WITH SimilarityScores AS (
+            -- Inline similarity scores as a virtual table
+            SELECT customer_id, similarity
+            FROM (VALUES {similarity_values}) AS t(customer_id, similarity)
+        ),
+        ProductPurchases AS (
+            -- Get all products bought by similar customers with their similarity scores
+            SELECT
+                oi.ProductID,
+                ss.customer_id,
+                ss.similarity
+            FROM dbo.ClientAgreement ca
+            INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
+            INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
+            INNER JOIN SimilarityScores ss ON ca.ClientID = ss.customer_id
+            WHERE o.Created < '{as_of_date}'
+                  AND oi.ProductID IS NOT NULL
+                  AND oi.ProductID NOT IN ({target_product_ids})  -- Exclude owned products
+        )
+        SELECT
+            ProductID,
+            SUM(similarity) / COUNT(DISTINCT customer_id) as weighted_score,
+            COUNT(DISTINCT customer_id) as customer_count
+        FROM ProductPurchases
+        GROUP BY ProductID
+        HAVING COUNT(DISTINCT customer_id) >= 2  -- At least 2 similar customers bought it
+        ORDER BY weighted_score DESC
         """
 
         cursor = self.conn.cursor(as_dict=True)
         cursor.execute(query)
 
-        # Create similarity lookup
-        similarity_map = {cid: sim for cid, sim in similar_customers}
-
-        # Calculate weighted collaborative scores
+        # Build scores dictionary
         collaborative_scores = {}
-
         for row in cursor:
-            product_id = row['ProductID']
-
-            # Skip if customer already bought this product
-            if product_id in target_products:
-                continue
-
-            # Get customers who bought this product
-            product_query = f"""
-            SELECT DISTINCT ca.ClientID
-            FROM dbo.ClientAgreement ca
-            INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
-            INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-            WHERE ca.ClientID IN ({similar_customer_ids})
-                  AND oi.ProductID = {product_id}
-                  AND o.Created < '{as_of_date}'
-            """
-
-            product_cursor = self.conn.cursor(as_dict=True)
-            product_cursor.execute(product_query)
-
-            # Weight by similarity of customers who bought it
-            weighted_score = 0.0
-            total_similarity = 0.0
-
-            for customer_row in product_cursor:
-                similar_cid = customer_row['ClientID']
-                similarity = similarity_map.get(similar_cid, 0)
-                weighted_score += similarity
-                total_similarity += similarity
-
-            product_cursor.close()
-
-            # Normalize by total similarity
-            if total_similarity > 0:
-                collaborative_scores[product_id] = weighted_score / total_similarity
+            collaborative_scores[row['ProductID']] = float(row['weighted_score'])
 
         cursor.close()
 
