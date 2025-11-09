@@ -246,9 +246,43 @@ async def get_metrics():
 
 
 def get_cache_key(customer_id: int, top_n: int, as_of_date: Optional[datetime]) -> str:
-    """Generate Redis cache key"""
+    """Generate Redis cache key for ad-hoc requests"""
     date_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else 'latest'
     return f"recs:v1:{customer_id}:{top_n}:{date_str}"
+
+
+def get_worker_cache_key(customer_id: int, as_of_date: str) -> str:
+    """
+    Generate Redis cache key for weekly worker pre-computed recommendations.
+    Must match the format used in weekly_recommendation_worker.py
+
+    Format: recommendations:customer:{customer_id}:{as_of_date}
+    Example: recommendations:customer:410376:2024-07-01
+    """
+    return f"recommendations:customer:{customer_id}:{as_of_date}"
+
+
+def get_from_worker_cache(customer_id: int, as_of_date: str) -> Optional[Dict[str, Any]]:
+    """
+    Get pre-computed recommendations from weekly worker cache.
+    Returns full result dict with metadata, not just recommendations list.
+    """
+    if not redis_client:
+        return None
+
+    try:
+        cache_key = get_worker_cache_key(customer_id, as_of_date)
+        cached = redis_client.get(cache_key)
+        if cached:
+            metrics['cache_hits'] += 1
+            logger.debug(f"Worker Cache HIT: {cache_key}")
+            return json.loads(cached)
+        else:
+            logger.debug(f"Worker Cache MISS: {cache_key}")
+            return None
+    except Exception as e:
+        logger.warning(f"Worker cache read error: {e}")
+        return None
 
 
 def get_from_cache(cache_key: str) -> Optional[List[Dict]]:
@@ -319,14 +353,34 @@ async def get_recommendations(request: RecommendationRequest):
                     detail=f"Invalid date format: {request.as_of_date}. Use YYYY-MM-DD"
                 )
 
-        # Check cache
+        # Check caches (worker cache first, then ad-hoc cache)
         cached = False
+        from_worker = False
         recommendations = None
+
+        # Convert datetime to string for cache key
+        as_of_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else datetime.now().strftime('%Y-%m-%d')
+
         if request.use_cache:
-            cache_key = get_cache_key(request.customer_id, request.top_n, as_of_date)
-            recommendations = get_from_cache(cache_key)
-            if recommendations:
+            # 1. Try worker cache first (pre-computed weekly recommendations)
+            worker_result = get_from_worker_cache(request.customer_id, as_of_str)
+            if worker_result:
+                # Worker cache stores full result dict, extract recommendations
+                recommendations = worker_result.get('recommendations', [])
+                # If top_n requested is different, truncate
+                if len(recommendations) > request.top_n:
+                    recommendations = recommendations[:request.top_n]
                 cached = True
+                from_worker = True
+                logger.info(f"✅ Served from worker cache: customer {request.customer_id}")
+
+            # 2. If not in worker cache, try ad-hoc cache
+            if recommendations is None:
+                cache_key = get_cache_key(request.customer_id, request.top_n, as_of_date)
+                recommendations = get_from_cache(cache_key)
+                if recommendations:
+                    cached = True
+                    logger.debug(f"Served from ad-hoc cache: customer {request.customer_id}")
 
         # Generate recommendations if not cached
         if recommendations is None:
@@ -336,8 +390,7 @@ async def get_recommendations(request: RecommendationRequest):
                 # Create recommender instance with pooled connection
                 recommender = ImprovedHybridRecommenderV32(conn=conn, use_cache=request.use_cache)
 
-                # Convert datetime to string format expected by improved recommender
-                as_of_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else datetime.now().strftime('%Y-%m-%d')
+                # as_of_str already defined above for cache keys
                 recommendations = recommender.get_recommendations(
                     customer_id=request.customer_id,
                     as_of_date=as_of_str,

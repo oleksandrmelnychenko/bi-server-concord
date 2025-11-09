@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # Redis Cache - Stores pre-computed recommendations
+  redis:
+    image: redis:7-alpine
+    container_name: recommendation-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - recommendation-network
+    restart: unless-stopped
+
+  # FastAPI - Serves recommendations from cache (or real-time fallback)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: recommendation-api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - DB_HOST=78.152.175.67
+      - DB_PORT=1433
+      - DB_NAME=ConcordDb_v5
+      - DB_USER=sa
+      - DB_PASSWORD=Passw0rd
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - recommendation-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Weekly Worker - Pre-computes recommendations for all customers
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: recommendation-worker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - DB_HOST=78.152.175.67
+      - DB_PORT=1433
+      - DB_NAME=ConcordDb_v5
+      - DB_USER=sa
+      - DB_PASSWORD=Passw0rd
+      - AS_OF_DATE=${AS_OF_DATE:-}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 2 * * 0}  # Default: Sunday 2 AM
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - recommendation-network
+    restart: unless-stopped
+    volumes:
+      - ./workers:/app/workers
+      - worker_logs:/app/workers/logs
+
+networks:
+  recommendation-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
+  worker_logs:
+    driver: local
