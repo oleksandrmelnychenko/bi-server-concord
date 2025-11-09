@@ -430,14 +430,98 @@ class ImprovedHybridRecommenderV32:
         cursor.close()
         return scores
 
-    def get_recommendations(self, customer_id: int, as_of_date: str, top_n: int = 50, include_discovery: bool = True) -> List[Dict]:
+    def get_product_groups(self, product_ids: List[int]) -> Dict[int, int]:
         """
-        Generate recommendations using V3.1 hybrid approach (repurchase + discovery).
+        Get product group mapping for given products.
+
+        Args:
+            product_ids: List of product IDs
+
+        Returns:
+            Dict mapping product_id to product_group_id
+        """
+        if not product_ids:
+            return {}
+
+        cursor = self.conn.cursor()
+
+        # Convert to comma-separated string for SQL IN clause
+        ids_str = ','.join(map(str, product_ids))
+
+        query = f"""
+        SELECT ProductID, ProductGroupID
+        FROM dbo.ProductProductGroup
+        WHERE ProductID IN ({ids_str})
+              AND Deleted = 0
+        """
+
+        cursor.execute(query)
+        rows = cursor.fetchall()
+
+        # Build mapping (handle both dict and tuple formats)
+        groups = {}
+        for row in rows:
+            if isinstance(row, dict):
+                groups[row['ProductID']] = row['ProductGroupID']
+            else:  # tuple format from connection pool
+                groups[row[0]] = row[1]
+
+        cursor.close()
+        logger.debug(f"Found product groups for {len(groups)}/{len(product_ids)} products")
+        return groups
+
+    def apply_diversity_filter(self, recommendations: List[Dict], max_per_group: int = 3) -> List[Dict]:
+        """
+        Ensure diversity across product groups.
+
+        Args:
+            recommendations: List of recommendation dicts
+            max_per_group: Max products per product group (default 3)
+
+        Returns:
+            Filtered recommendations with diversity enforced
+        """
+        if not recommendations:
+            return recommendations
+
+        # Get product groups
+        product_ids = [r['product_id'] for r in recommendations]
+        groups = self.get_product_groups(product_ids)
+
+        # Count products per group
+        group_counts = defaultdict(int)
+        filtered = []
+
+        for rec in recommendations:
+            group_id = groups.get(rec['product_id'])
+
+            # If product has no group or hasn't exceeded limit, include it
+            if group_id is None or group_counts[group_id] < max_per_group:
+                filtered.append(rec)
+                if group_id is not None:
+                    group_counts[group_id] += 1
+
+        # Update ranks after filtering
+        for idx, rec in enumerate(filtered):
+            rec['rank'] = idx + 1
+
+        logger.debug(f"Diversity filter: {len(recommendations)} → {len(filtered)} products " +
+                    f"(max {max_per_group} per group, {len(group_counts)} groups)")
+
+        return filtered
+
+    def get_recommendations(self, customer_id: int, as_of_date: str, top_n: int = 25,
+                           repurchase_count: int = 20, discovery_count: int = 5,
+                           include_discovery: bool = True) -> List[Dict]:
+        """
+        Generate recommendations using V3.2 approach (strict old/new mix).
 
         Args:
             customer_id: Customer to generate recommendations for
             as_of_date: Point in time for recommendations
-            top_n: Number of recommendations to return
+            top_n: Total recommendations (default 25)
+            repurchase_count: Number of repurchase products (default 20)
+            discovery_count: Number of discovery products (default 5)
             include_discovery: Whether to include collaborative filtering discovery
 
         Returns:
@@ -475,71 +559,65 @@ class ImprovedHybridRecommenderV32:
                 v3_weights['recency'] * rec_score
             )
 
-        # Get collaborative filtering scores (discovery)
-        # OPTIMIZATION: Skip discovery for HEAVY users (they already buy most products, huge performance cost)
-        collaborative_scores = {}
-        if include_discovery and segment != "HEAVY":
-            collaborative_scores = self.get_collaborative_score(customer_id, as_of_date)
-            logger.debug(f"Discovery enabled for {segment} user, found {len(collaborative_scores)} new products")
-        elif segment == "HEAVY":
-            logger.debug(f"Discovery skipped for HEAVY user (performance optimization)")
+        # V3.2: STRICT SEPARATION - Get MORE products initially (to account for diversity filtering)
+        # Request 30 repurchase (will filter to 20) and 10 discovery (will filter to 5)
+        request_repurchase = repurchase_count + 10
+        request_discovery = discovery_count + 5
 
-        # Determine blend weights (repurchase vs discovery)
-        if segment == "HEAVY":
-            blend_weights = {'repurchase': 0.80, 'discovery': 0.20}
-        elif segment == "REGULAR":
-            if subsegment == "CONSISTENT":
-                blend_weights = {'repurchase': 0.65, 'discovery': 0.35}
-            else:  # EXPLORATORY
-                blend_weights = {'repurchase': 0.50, 'discovery': 0.50}
-        else:  # LIGHT
-            blend_weights = {'repurchase': 0.40, 'discovery': 0.60}
+        sorted_repurchase = sorted(repurchase_scores.items(), key=lambda x: x[1], reverse=True)
+        repurchase_recommendations = []
 
-        # Combine all products
-        all_products = set(repurchase_scores.keys()) | set(collaborative_scores.keys())
-
-        # Normalize scores to 0-1 range for fair blending
-        max_repurchase = max(repurchase_scores.values()) if repurchase_scores else 1.0
-        max_collaborative = max(collaborative_scores.values()) if collaborative_scores else 1.0
-
-        final_scores = {}
-
-        for product_id in all_products:
-            repurchase_score = repurchase_scores.get(product_id, 0) / max_repurchase
-            collaborative_score = collaborative_scores.get(product_id, 0) / max_collaborative
-
-            final_scores[product_id] = (
-                blend_weights['repurchase'] * repurchase_score +
-                blend_weights['discovery'] * collaborative_score
-            )
-
-        # Sort and return top N
-        sorted_products = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)
-
-        recommendations = []
-        for idx, (product_id, score) in enumerate(sorted_products[:top_n]):
-            # Determine source
-            is_repurchase = product_id in repurchase_scores
-            is_discovery = product_id in collaborative_scores
-
-            if is_repurchase and is_discovery:
-                source = "hybrid"
-            elif is_repurchase:
-                source = "repurchase"
-            else:
-                source = "discovery"
-
-            recommendations.append({
+        for idx, (product_id, score) in enumerate(sorted_repurchase[:request_repurchase]):
+            repurchase_recommendations.append({
                 'product_id': product_id,
                 'score': float(score),
                 'rank': idx + 1,
                 'segment': f"{segment}_{subsegment}" if subsegment else segment,
-                'source': source  # NEW: indicates recommendation type
+                'source': 'repurchase'
             })
 
+        # Get owned products (to exclude from discovery)
+        owned_products = set(repurchase_scores.keys())
+
+        # V3.2: Get discovery products (excluding already owned)
+        discovery_recommendations = []
+        if include_discovery:
+            collaborative_scores = self.get_collaborative_score(customer_id, as_of_date)
+            logger.debug(f"Discovery enabled for {segment} user, found {len(collaborative_scores)} new products")
+
+            # Filter out products customer already owns
+            new_products = {pid: score for pid, score in collaborative_scores.items()
+                          if pid not in owned_products}
+
+            sorted_discovery = sorted(new_products.items(), key=lambda x: x[1], reverse=True)
+
+            for idx, (product_id, score) in enumerate(sorted_discovery[:request_discovery]):
+                discovery_recommendations.append({
+                    'product_id': product_id,
+                    'score': float(score),
+                    'rank': request_repurchase + idx + 1,  # Continue rank after repurchase
+                    'segment': f"{segment}_{subsegment}" if subsegment else segment,
+                    'source': 'discovery'
+                })
+
+        # V3.2: Apply diversity filter FIRST (max 3 products per group)
+        repurchase_filtered = self.apply_diversity_filter(repurchase_recommendations, max_per_group=3)
+        discovery_filtered = self.apply_diversity_filter(discovery_recommendations, max_per_group=3)
+
+        # Now take exactly the requested counts
+        repurchase_final = repurchase_filtered[:repurchase_count]
+        discovery_final = discovery_filtered[:discovery_count]
+
+        # Combine: repurchase first, then discovery
+        recommendations = repurchase_final + discovery_final
+
+        # Update final ranks
+        for idx, rec in enumerate(recommendations):
+            rec['rank'] = idx + 1
+
         # Log statistics
-        discovery_count = sum(1 for r in recommendations if r['source'] in ['discovery', 'hybrid'])
-        logger.info(f"Generated {len(recommendations)} recommendations ({discovery_count} include discovery)")
+        logger.info(f"Generated {len(recommendations)} recommendations " +
+                   f"({len(repurchase_final)} repurchase + {len(discovery_final)} discovery)")
 
         return recommendations
 
