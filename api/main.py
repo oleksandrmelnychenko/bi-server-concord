@@ -32,7 +32,8 @@ import json
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from scripts.improved_hybrid_recommender import ImprovedHybridRecommender
+from scripts.improved_hybrid_recommender_v31 import ImprovedHybridRecommenderV31
+from scripts.redis_helper import WeeklyRecommendationCache
 from api.db_pool import get_connection, close_pool
 
 # Configure logging
@@ -54,6 +55,7 @@ TARGET_P50_MS = 50
 
 # Global state
 redis_client = None
+weekly_cache = None  # WeeklyRecommendationCache for pre-computed weekly recommendations
 # Connection pool is managed by db_pool module (no global recommender needed)
 metrics = {
     'requests': 0,
@@ -67,7 +69,7 @@ metrics = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global redis_client
+    global redis_client, weekly_cache
 
     # Startup
     logger.info("="*60)
@@ -89,6 +91,14 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠ Redis not available: {e}. Running without cache.")
         redis_client = None
 
+    # Initialize Weekly Recommendation Cache
+    try:
+        weekly_cache = WeeklyRecommendationCache()
+        logger.info(f"✓ Weekly recommendation cache initialized")
+    except Exception as e:
+        logger.warning(f"⚠ Weekly cache not available: {e}. Weekly endpoint will use fallback.")
+        weekly_cache = None
+
     # Connection pool is initialized in db_pool module
     logger.info("✓ Database connection pool initialized (20 connections, max 30)")
     logger.info("✓ Improved Hybrid Recommender V3 (75.4% precision@50)")
@@ -101,6 +111,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down API...")
     if redis_client:
         redis_client.close()
+    if weekly_cache:
+        weekly_cache.close()
     close_pool()
     logger.info("✓ Database connection pool closed")
 
@@ -129,6 +141,7 @@ class RecommendationRequest(BaseModel):
     top_n: int = Field(50, ge=1, le=500, description="Number of recommendations to return")
     as_of_date: Optional[str] = Field(None, description="ISO date for point-in-time recommendations (YYYY-MM-DD)")
     use_cache: bool = Field(True, description="Whether to use Redis cache")
+    include_discovery: bool = Field(True, description="Whether to include collaborative filtering for new product discovery (V3.1)")
 
     class Config:
         json_schema_extra = {
@@ -136,7 +149,8 @@ class RecommendationRequest(BaseModel):
                 "customer_id": 410376,
                 "top_n": 50,
                 "as_of_date": "2024-07-01",
-                "use_cache": True
+                "use_cache": True,
+                "include_discovery": True
             }
         }
 
@@ -145,6 +159,7 @@ class RecommendationResponse(BaseModel):
     customer_id: int
     recommendations: List[Dict[str, Any]]
     count: int
+    discovery_count: int = Field(0, description="Number of recommendations that are NEW products (not previously purchased)")
     precision_estimate: float = Field(0.754, description="Expected precision@50 based on validation (Heavy: 89.2%, Regular: 88.2%, Light: 54.1%)")
     latency_ms: float
     cached: bool
@@ -275,14 +290,19 @@ def set_in_cache(cache_key: str, recommendations: List[Dict], ttl: int = CACHE_T
 @app.post("/recommend", response_model=RecommendationResponse, tags=["Recommendations"])
 async def get_recommendations(request: RecommendationRequest):
     """
-    Generate product recommendations for a customer
+    Generate product recommendations for a customer (V3.1 with discovery)
 
     Returns top-N product recommendations with expected 75.4% precision@50
     - Heavy users (500+ orders): 89.2% precision
     - Regular users (100-500 orders): 88.2% precision
     - Light users (<100 orders): 54.1% precision
 
-    Performance: <400ms P99 latency with concurrent request support (20+ concurrent users)
+    NEW in V3.1: Collaborative filtering for new product discovery
+    - Recommends BOTH repurchase products AND new products customer hasn't bought
+    - Finds similar customers using Jaccard similarity
+    - Segment-specific blending (Heavy: 80% repurchase, Light: 60% discovery)
+
+    Performance: <2s latency (acceptable for quality improvement)
     """
     start_time = time.time()
     metrics['requests'] += 1
@@ -314,14 +334,15 @@ async def get_recommendations(request: RecommendationRequest):
             conn = get_connection()
             try:
                 # Create recommender instance with pooled connection
-                recommender = ImprovedHybridRecommender(conn=conn)
+                recommender = ImprovedHybridRecommenderV31(conn=conn, use_cache=request.use_cache)
 
                 # Convert datetime to string format expected by improved recommender
                 as_of_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else datetime.now().strftime('%Y-%m-%d')
                 recommendations = recommender.get_recommendations(
                     customer_id=request.customer_id,
                     as_of_date=as_of_str,
-                    top_n=request.top_n
+                    top_n=request.top_n,
+                    include_discovery=request.include_discovery
                 )
             finally:
                 # Return connection to pool
@@ -335,6 +356,9 @@ async def get_recommendations(request: RecommendationRequest):
         latency_ms = (time.time() - start_time) * 1000
         metrics['total_latency_ms'] += latency_ms
 
+        # Count discovery recommendations
+        discovery_count = sum(1 for r in recommendations if r.get('source') in ['discovery', 'hybrid'])
+
         # Log slow requests
         if latency_ms > TARGET_P99_MS:
             logger.warning(f"Slow request: {latency_ms:.2f}ms (customer: {request.customer_id})")
@@ -343,6 +367,7 @@ async def get_recommendations(request: RecommendationRequest):
             customer_id=request.customer_id,
             recommendations=recommendations,
             count=len(recommendations),
+            discovery_count=discovery_count,
             precision_estimate=0.754,  # From Improved V3 validation (50-customer test)
             latency_ms=round(latency_ms, 2),
             cached=cached,
@@ -354,6 +379,85 @@ async def get_recommendations(request: RecommendationRequest):
     except Exception as e:
         metrics['errors'] += 1
         logger.error(f"Error generating recommendations: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
+@app.get("/weekly-recommendations/{customer_id}", tags=["Recommendations"])
+async def get_weekly_recommendations(customer_id: int):
+    """
+    Get pre-computed weekly recommendations for a customer (fast retrieval from Redis).
+
+    This endpoint returns 25 product recommendations that were pre-computed by the
+    weekly recommendation worker job. Recommendations are unique per week and include
+    a mix of repurchase products (old) and discovery products (new).
+
+    Performance: <10ms latency (cached in Redis)
+    Fallback: If cache miss, generates on-demand (slower, ~2s)
+
+    Returns:
+        - customer_id: Customer ID
+        - week: Week identifier (e.g., "2025_W45")
+        - recommendations: List of 25 product recommendations
+        - cached: Whether from cache (True) or generated on-demand (False)
+        - latency_ms: Response time
+    """
+    start_time = time.time()
+
+    try:
+        # Try to get from weekly cache first
+        recommendations = None
+        week_key = None
+        cached = False
+
+        if weekly_cache:
+            week_key = weekly_cache.get_week_key()
+            recommendations = weekly_cache.get_recommendations(customer_id)
+
+            if recommendations:
+                cached = True
+                logger.debug(f"Weekly cache HIT for customer {customer_id} (week {week_key})")
+            else:
+                logger.debug(f"Weekly cache MISS for customer {customer_id} (week {week_key})")
+
+        # Fallback: Generate on-demand if not in cache
+        if recommendations is None:
+            logger.info(f"Generating on-demand recommendations for customer {customer_id}")
+
+            conn = get_connection()
+            try:
+                recommender = ImprovedHybridRecommenderV31(conn=conn, use_cache=True)
+                as_of_date = datetime.now().strftime('%Y-%m-%d')
+                recommendations = recommender.get_recommendations(
+                    customer_id=customer_id,
+                    as_of_date=as_of_date,
+                    top_n=25,
+                    include_discovery=True
+                )
+            finally:
+                conn.close()
+
+        # Calculate latency
+        latency_ms = (time.time() - start_time) * 1000
+
+        # Count discovery recommendations
+        discovery_count = sum(1 for r in recommendations if r.get('source') in ['discovery', 'hybrid'])
+
+        return {
+            "customer_id": customer_id,
+            "week": week_key or weekly_cache.get_week_key() if weekly_cache else "unknown",
+            "recommendations": recommendations,
+            "count": len(recommendations),
+            "discovery_count": discovery_count,
+            "cached": cached,
+            "latency_ms": round(latency_ms, 2),
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting weekly recommendations: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
