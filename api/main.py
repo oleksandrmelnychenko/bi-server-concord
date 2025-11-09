@@ -32,7 +32,7 @@ import json
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from scripts.improved_hybrid_recommender_v31 import ImprovedHybridRecommenderV31
+from scripts.improved_hybrid_recommender_v32 import ImprovedHybridRecommenderV32
 from scripts.redis_helper import WeeklyRecommendationCache
 from api.db_pool import get_connection, close_pool
 
@@ -334,7 +334,7 @@ async def get_recommendations(request: RecommendationRequest):
             conn = get_connection()
             try:
                 # Create recommender instance with pooled connection
-                recommender = ImprovedHybridRecommenderV31(conn=conn, use_cache=request.use_cache)
+                recommender = ImprovedHybridRecommenderV32(conn=conn, use_cache=request.use_cache)
 
                 # Convert datetime to string format expected by improved recommender
                 as_of_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else datetime.now().strftime('%Y-%m-%d')
@@ -428,7 +428,7 @@ async def get_weekly_recommendations(customer_id: int):
 
             conn = get_connection()
             try:
-                recommender = ImprovedHybridRecommenderV31(conn=conn, use_cache=True)
+                recommender = ImprovedHybridRecommenderV32(conn=conn, use_cache=True)
                 as_of_date = datetime.now().strftime('%Y-%m-%d')
                 recommendations = recommender.get_recommendations(
                     customer_id=customer_id,
