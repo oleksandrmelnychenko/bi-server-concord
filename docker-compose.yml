@@ -73,6 +73,38 @@ services:
       - ./workers:/app/workers
       - worker_logs:/app/workers/logs
 
+  # Forecast Worker - Pre-computes product forecasts
+  forecast-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api  # Uses same Dockerfile as API
+    container_name: forecast-worker
+    command: python3 scripts/forecasting/forecast_worker.py
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - MSSQL_HOST=78.152.175.67
+      - MSSQL_PORT=1433
+      - MSSQL_DATABASE=ConcordDb_v5
+      - MSSQL_USER=sa
+      - MSSQL_PASSWORD=Passw0rd
+      - AS_OF_DATE=${AS_OF_DATE:-}
+      - FORECAST_CACHE_TTL=${FORECAST_CACHE_TTL:-604800}
+      - FORECAST_WORKERS=${FORECAST_WORKERS:-10}
+      - FORECAST_MIN_CUSTOMERS=${FORECAST_MIN_CUSTOMERS:-2}
+      - FORECAST_MIN_ORDERS=${FORECAST_MIN_ORDERS:-3}
+      - FORECAST_CRON_SCHEDULE=${FORECAST_CRON_SCHEDULE:-0 3 * * 0}  # Default: Sunday 3 AM
+      - FORECAST_RUN_ON_STARTUP=${FORECAST_RUN_ON_STARTUP:-false}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - recommendation-network
+    restart: "no"  # Don't auto-restart - run on demand or via cron
+    profiles:
+      - forecast  # Optional profile - only starts with docker-compose --profile forecast up
+
 networks:
   recommendation-network:
     driver: bridge
