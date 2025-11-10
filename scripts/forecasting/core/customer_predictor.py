@@ -222,6 +222,29 @@ class CustomerPredictor:
 
         expected_cycle = base_expected_days + trend_adjustment
 
+        # RFM Enhancement: Adjust expected cycle based on RFM frequency
+        # High-frequency customers (high RFM frequency) may order slightly earlier
+        if pattern.rfm_frequency_score > 0.7:
+            # Very frequent customers: reduce expected cycle by 5%
+            expected_cycle *= 0.95
+        elif pattern.rfm_frequency_score < 0.3:
+            # Infrequent customers: increase expected cycle by 5%
+            expected_cycle *= 1.05
+
+        # Velocity Enhancement: Adjust for ordering momentum
+        # Accelerating customers (negative velocity) → shorter cycle
+        # Decelerating customers (positive velocity) → longer cycle
+        if pattern.velocity_trend == 'accelerating':
+            # Customer is ordering faster → reduce expected cycle
+            velocity_adjustment = abs(pattern.order_velocity) * 0.5  # Use 50% of velocity
+            expected_cycle *= (1 - velocity_adjustment)
+            expected_cycle = max(expected_cycle, pattern.reorder_cycle_median * 0.7)  # Floor at 70%
+        elif pattern.velocity_trend == 'decelerating':
+            # Customer is ordering slower → increase expected cycle
+            velocity_adjustment = abs(pattern.order_velocity) * 0.5
+            expected_cycle *= (1 + velocity_adjustment)
+            expected_cycle = min(expected_cycle, pattern.reorder_cycle_median * 1.5)  # Cap at 150%
+
         # Adjust for churn risk
         if pattern.status == 'at_risk':
             # Likely to order later than expected
@@ -244,6 +267,11 @@ class CustomerPredictor:
         # Inflate uncertainty for low consistency
         uncertainty_multiplier = 1 + (1 - pattern.consistency_score)
         stddev_days *= uncertainty_multiplier
+
+        # RFM Enhancement: Adjust uncertainty based on RFM consistency
+        # High RFM consistency → tighter confidence intervals
+        rfm_consistency_factor = 1 - (0.3 * pattern.rfm_consistency_score)
+        stddev_days *= rfm_consistency_factor
 
         # Seasonality adjustment
         if pattern.seasonality_detected and pattern.seasonality_period_days:
@@ -300,11 +328,29 @@ class CustomerPredictor:
             # Expect slightly lower quantity
             expected_qty *= 0.9
 
+        # RFM Enhancement: High-value customers (high RFM monetary) tend to order consistently
+        # Adjust expected quantity based on RFM segment
+        if pattern.rfm_monetary_score > 0.8:
+            # High-value customers: slightly increase expected quantity (they're champions)
+            expected_qty *= 1.05
+        elif pattern.rfm_monetary_score < 0.3:
+            # Low-value customers: slightly decrease expected quantity
+            expected_qty *= 0.95
+
         # Adjust for churn risk (at-risk customers may order less)
         if pattern.status == 'at_risk':
             expected_qty *= (1 - 0.2 * pattern.churn_probability)
         elif pattern.status == 'churned':
             expected_qty *= 0.5  # If they order, likely smaller amount
+
+        # RFM Enhancement: Tighten confidence intervals for high-value, consistent customers
+        # High RFM monetary + consistency = more predictable quantities
+        rfm_quantity_confidence = (
+            0.6 * pattern.rfm_monetary_score +
+            0.4 * pattern.rfm_consistency_score
+        )
+        quantity_uncertainty_factor = 1 - (0.3 * rfm_quantity_confidence)
+        stddev *= quantity_uncertainty_factor
 
         # Confidence intervals (95%)
         ci_multiplier = 1.96

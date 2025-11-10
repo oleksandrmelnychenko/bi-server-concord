@@ -71,6 +71,18 @@ class CustomerProductPattern:
     days_since_last_order: int
     days_overdue: float         # negative if not overdue
 
+    # RFM (Recency-Frequency-Monetary) Metrics
+    rfm_recency_score: float    # 0-1 (1 = very recent order)
+    rfm_frequency_score: float  # 0-1 (orders per year normalized)
+    rfm_monetary_score: float   # 0-1 (average order value normalized)
+    rfm_consistency_score: float # 0-1 (regularity of ordering)
+    rfm_segment: str            # 'champion', 'loyal', 'at_risk', 'hibernating', 'lost'
+
+    # Order Velocity Metrics
+    order_velocity: float       # Change in order frequency (negative = accelerating, positive = decelerating)
+    order_acceleration: float   # Change in velocity (second derivative)
+    velocity_trend: str         # 'accelerating', 'stable', 'decelerating'
+
     # Confidence (Bayesian posterior)
     pattern_confidence: float   # 0-1 (based on sample size + consistency)
 
@@ -165,15 +177,25 @@ class PatternAnalyzer:
                 cycle_cv, len(orders), cycle_iqr, cycle_median
             )
 
-            # 9. Churn risk assessment
+            # 9. Calculate days since last order (needed for RFM and churn)
             days_since_last = (datetime.fromisoformat(as_of_date) - orders[-1]['date']).days
-            status, churn_prob, days_overdue = self._assess_churn_risk(
-                days_since_last, cycle_median, cycle_iqr, len(orders)
+
+            # 10. RFM Features (calculate early, used by churn and confidence)
+            rfm = self._calculate_rfm_features(
+                orders, days_since_last, cycle_median, cycle_cv, as_of_date
             )
 
-            # 10. Pattern confidence (Bayesian posterior)
+            # 11. Order Velocity (calculate momentum)
+            velocity = self._calculate_order_velocity(orders)
+
+            # 12. Churn risk assessment (with RFM enhancement)
+            status, churn_prob, days_overdue = self._assess_churn_risk(
+                days_since_last, cycle_median, cycle_iqr, len(orders), rfm
+            )
+
+            # 13. Pattern confidence (Bayesian posterior with RFM)
             pattern_confidence = self._calculate_pattern_confidence(
-                len(orders), consistency, days_since_last, cycle_median
+                len(orders), consistency, days_since_last, cycle_median, rfm
             )
 
             return CustomerProductPattern(
@@ -199,6 +221,14 @@ class PatternAnalyzer:
                 churn_probability=churn_prob,
                 days_since_last_order=days_since_last,
                 days_overdue=days_overdue,
+                rfm_recency_score=rfm['recency_score'],
+                rfm_frequency_score=rfm['frequency_score'],
+                rfm_monetary_score=rfm['monetary_score'],
+                rfm_consistency_score=rfm['consistency_score'],
+                rfm_segment=rfm['segment'],
+                order_velocity=velocity['velocity'],
+                order_acceleration=velocity['acceleration'],
+                velocity_trend=velocity['trend'],
                 pattern_confidence=pattern_confidence
             )
 
@@ -432,10 +462,16 @@ class PatternAnalyzer:
         days_since_last: int,
         cycle_median: Optional[float],
         cycle_iqr: Optional[float],
-        n_orders: int
+        n_orders: int,
+        rfm: Optional[Dict] = None
     ) -> Tuple[str, float, float]:
         """
-        Assess churn risk using survival analysis
+        Assess churn risk using survival analysis with RFM enhancement
+
+        RFM Enhancement:
+        - High RFM recency score → lower churn risk
+        - High RFM frequency score → more loyal, lower churn
+        - Low RFM scores → higher churn risk
 
         Returns: (status, churn_probability, days_overdue)
         """
@@ -478,6 +514,40 @@ class PatternAnalyzer:
         loyalty_factor = min(1.0, n_orders / 10)
         churn_prob = churn_prob * (1 - 0.3 * loyalty_factor)
 
+        # RFM Enhancement: Adjust churn based on RFM scores
+        if rfm:
+            # High RFM recency = recently ordered = lower churn
+            recency_adjustment = rfm['recency_score']
+
+            # High RFM frequency = loyal customer = lower churn
+            frequency_adjustment = rfm['frequency_score']
+
+            # High RFM monetary = valuable customer = lower churn (businesses work harder to retain)
+            monetary_adjustment = rfm['monetary_score']
+
+            # Combined RFM loyalty score
+            rfm_loyalty = (
+                0.4 * recency_adjustment +
+                0.4 * frequency_adjustment +
+                0.2 * monetary_adjustment
+            )
+
+            # Reduce churn probability based on RFM loyalty
+            # High RFM (0.8+) → reduce churn by up to 40%
+            # Medium RFM (0.5) → reduce churn by 20%
+            # Low RFM (0.2) → reduce churn by 0-10%
+            churn_reduction = 0.5 * rfm_loyalty  # Max 50% reduction
+            churn_prob = churn_prob * (1 - churn_reduction)
+
+            # Adjust status based on RFM
+            # High-RFM customers stay "active" longer
+            if status == 'at_risk' and rfm_loyalty > 0.7:
+                # Downgrade risk for high-loyalty customers
+                status = 'active'
+            elif status == 'churned' and rfm_loyalty > 0.6:
+                # Give high-loyalty customers benefit of doubt
+                status = 'at_risk'
+
         return (status, round(churn_prob, 3), round(days_overdue, 1))
 
     def _calculate_pattern_confidence(
@@ -485,13 +555,19 @@ class PatternAnalyzer:
         n_orders: int,
         consistency: float,
         days_since_last: int,
-        cycle_median: Optional[float]
+        cycle_median: Optional[float],
+        rfm: Optional[Dict] = None
     ) -> float:
         """
-        Bayesian confidence in pattern prediction
+        Bayesian confidence in pattern prediction with RFM enhancement
 
         Higher confidence = more predictable
-        Combines sample size, consistency, and recency
+        Combines sample size, consistency, recency, and RFM features
+
+        RFM Enhancement:
+        - High RFM consistency → higher confidence
+        - High RFM frequency → more reliable patterns
+        - High RFM recency → more relevant predictions
         """
         # Prior: Start with medium confidence
         prior = 0.5
@@ -508,12 +584,293 @@ class PatternAnalyzer:
         else:
             recency_factor = 0.5
 
-        # Bayesian update (simplified)
-        posterior = (
-            0.2 * prior +
-            0.4 * likelihood_sample +
-            0.3 * likelihood_consistency +
-            0.1 * recency_factor
-        )
+        # RFM Enhancement (if available)
+        if rfm:
+            # RFM consistency: how regular are orders
+            rfm_consistency_factor = rfm['consistency_score']
+
+            # RFM frequency: frequent customers = more predictable
+            rfm_frequency_factor = rfm['frequency_score']
+
+            # RFM recency: recent customers = more reliable
+            rfm_recency_factor = rfm['recency_score']
+
+            # Combined RFM factor (weighted average)
+            rfm_factor = (
+                0.4 * rfm_consistency_factor +
+                0.3 * rfm_frequency_factor +
+                0.3 * rfm_recency_factor
+            )
+
+            # Bayesian update with RFM (rebalanced weights)
+            posterior = (
+                0.1 * prior +
+                0.25 * likelihood_sample +
+                0.20 * likelihood_consistency +
+                0.10 * recency_factor +
+                0.35 * rfm_factor  # RFM gets highest weight
+            )
+        else:
+            # Fallback: original calculation without RFM
+            posterior = (
+                0.2 * prior +
+                0.4 * likelihood_sample +
+                0.3 * likelihood_consistency +
+                0.1 * recency_factor
+            )
 
         return round(posterior, 3)
+
+    def _calculate_rfm_features(
+        self,
+        orders: List[Dict],
+        days_since_last: int,
+        cycle_median: Optional[float],
+        cycle_cv: float,
+        as_of_date: str
+    ) -> Dict:
+        """
+        Calculate RFM (Recency-Frequency-Monetary) features
+
+        RFM Analysis for B2B customers:
+        - Recency: How recently did they order? (0-1, higher = more recent)
+        - Frequency: How often do they order? (0-1, higher = more frequent)
+        - Monetary: How much do they spend? (0-1, higher = more value)
+        - Consistency: How regular are their orders? (0-1, higher = more predictable)
+
+        Args:
+            orders: List of order history dicts
+            days_since_last: Days since last order
+            cycle_median: Median reorder cycle days
+            cycle_cv: Coefficient of variation of reorder cycles
+            as_of_date: Analysis date
+
+        Returns:
+            Dict with RFM scores and segment
+        """
+        if len(orders) == 0:
+            return {
+                'recency_score': 0.0,
+                'frequency_score': 0.0,
+                'monetary_score': 0.0,
+                'consistency_score': 0.0,
+                'segment': 'new'
+            }
+
+        # 1. RECENCY SCORE (0-1, higher = more recent)
+        # Score based on days since last order relative to expected cycle
+        if cycle_median and cycle_median > 0:
+            # Normalize by expected cycle: on-time = 1.0, overdue = lower
+            recency_ratio = cycle_median / max(1, days_since_last)
+            recency_score = min(1.0, max(0.0, recency_ratio))
+        else:
+            # Fallback: use absolute recency
+            # Recent (< 30 days) = high, old (> 180 days) = low
+            if days_since_last < 30:
+                recency_score = 1.0
+            elif days_since_last < 90:
+                recency_score = 0.7
+            elif days_since_last < 180:
+                recency_score = 0.4
+            else:
+                recency_score = 0.1
+
+        # 2. FREQUENCY SCORE (0-1, higher = more frequent orders)
+        # Calculate orders per year
+        first_order = orders[0]['date']
+        last_order = orders[-1]['date']
+        total_days = (datetime.fromisoformat(as_of_date) - first_order).days
+
+        if total_days > 0:
+            orders_per_year = len(orders) / (total_days / 365.25)
+        else:
+            orders_per_year = 0
+
+        # Normalize: 0-1 orders/year → 0-0.3, 1-4 orders/year → 0.3-0.7, 4+ → 0.7-1.0
+        if orders_per_year < 1:
+            frequency_score = 0.3 * orders_per_year
+        elif orders_per_year < 4:
+            frequency_score = 0.3 + 0.4 * (orders_per_year - 1) / 3
+        else:
+            frequency_score = 0.7 + 0.3 * min(1.0, (orders_per_year - 4) / 8)
+
+        frequency_score = round(min(1.0, max(0.0, frequency_score)), 3)
+
+        # 3. MONETARY SCORE (0-1, higher = higher value customer)
+        # Use average order revenue
+        # Note: We need to query for revenue data, but for now use quantity as proxy
+        avg_quantity = np.mean([o['quantity'] for o in orders])
+
+        # Normalize quantity to 0-1 scale
+        # Typical B2B: 1-10 units → 0.3-0.7, 10+ units → 0.7-1.0
+        if avg_quantity < 5:
+            monetary_score = 0.3 + 0.4 * (avg_quantity / 5)
+        elif avg_quantity < 20:
+            monetary_score = 0.7 + 0.2 * ((avg_quantity - 5) / 15)
+        else:
+            monetary_score = 0.9 + 0.1 * min(1.0, (avg_quantity - 20) / 30)
+
+        monetary_score = round(min(1.0, max(0.0, monetary_score)), 3)
+
+        # 4. CONSISTENCY SCORE (0-1, higher = more predictable)
+        # Use inverse of CV: low CV = high consistency
+        if cycle_cv > 0:
+            # CV of 0-0.5 → score 0.7-1.0 (very consistent)
+            # CV of 0.5-1.5 → score 0.3-0.7 (moderate)
+            # CV > 1.5 → score 0-0.3 (inconsistent)
+            if cycle_cv < 0.5:
+                consistency_score = 0.7 + 0.3 * (1 - cycle_cv / 0.5)
+            elif cycle_cv < 1.5:
+                consistency_score = 0.3 + 0.4 * (1 - (cycle_cv - 0.5) / 1.0)
+            else:
+                consistency_score = 0.3 * max(0.0, 1 - (cycle_cv - 1.5) / 2.0)
+        else:
+            consistency_score = 1.0  # Perfect consistency (though unlikely)
+
+        consistency_score = round(min(1.0, max(0.0, consistency_score)), 3)
+
+        # 5. RFM SEGMENT CLASSIFICATION
+        # Classify customer based on RFM scores
+        # Using thresholds: High = 0.6+, Medium = 0.3-0.6, Low = < 0.3
+
+        r_high = recency_score >= 0.6
+        r_med = 0.3 <= recency_score < 0.6
+        f_high = frequency_score >= 0.6
+        f_med = 0.3 <= frequency_score < 0.6
+        m_high = monetary_score >= 0.6
+
+        # Segment logic (simplified RFM segmentation)
+        if r_high and f_high and m_high:
+            segment = 'champion'  # Best customers
+        elif r_high and f_high:
+            segment = 'loyal'  # Regular high-frequency customers
+        elif r_high and not f_high:
+            segment = 'potential'  # Recent but low frequency
+        elif r_med and f_high:
+            segment = 'at_risk'  # High frequency but slipping
+        elif r_med:
+            segment = 'hibernating'  # Moderate recency, need attention
+        else:
+            segment = 'lost'  # Low recency
+
+        return {
+            'recency_score': round(recency_score, 3),
+            'frequency_score': frequency_score,
+            'monetary_score': monetary_score,
+            'consistency_score': consistency_score,
+            'segment': segment
+        }
+
+    def _calculate_order_velocity(
+        self,
+        orders: List[Dict]
+    ) -> Dict:
+        """
+        Calculate order velocity and acceleration
+
+        Order Velocity measures whether customer is ordering faster or slower:
+        - Negative velocity = accelerating (intervals decreasing)
+        - Positive velocity = decelerating (intervals increasing)
+        - Zero velocity = stable
+
+        Acceleration is the second derivative (change in velocity).
+
+        Args:
+            orders: List of order history dicts
+
+        Returns:
+            Dict with velocity, acceleration, and trend
+        """
+        if len(orders) < 3:
+            return {
+                'velocity': 0.0,
+                'acceleration': 0.0,
+                'trend': 'stable'
+            }
+
+        # Calculate intervals between consecutive orders
+        intervals = []
+        for i in range(1, len(orders)):
+            days = (orders[i]['date'] - orders[i-1]['date']).days
+            if days > 0:  # Ignore same-day duplicates
+                intervals.append(days)
+
+        if len(intervals) < 2:
+            return {
+                'velocity': 0.0,
+                'acceleration': 0.0,
+                'trend': 'stable'
+            }
+
+        # Calculate velocity: comparing recent vs historical intervals
+        # Use median for robustness
+        if len(intervals) >= 4:
+            # Split into recent (last 25%) and historical (first 75%)
+            split_point = max(1, len(intervals) * 3 // 4)
+            historical_intervals = intervals[:split_point]
+            recent_intervals = intervals[split_point:]
+
+            historical_median = np.median(historical_intervals)
+            recent_median = np.median(recent_intervals)
+
+            # Velocity = (recent - historical) / historical
+            # Positive = slowing down, Negative = speeding up
+            if historical_median > 0:
+                velocity = (recent_median - historical_median) / historical_median
+            else:
+                velocity = 0.0
+        else:
+            # Too few intervals: use simple comparison of first vs last half
+            mid = len(intervals) // 2
+            first_half_median = np.median(intervals[:mid+1])
+            second_half_median = np.median(intervals[mid:])
+
+            if first_half_median > 0:
+                velocity = (second_half_median - first_half_median) / first_half_median
+            else:
+                velocity = 0.0
+
+        # Calculate acceleration (second derivative)
+        # Compare velocity of early vs late periods
+        if len(intervals) >= 6:
+            # Split into thirds
+            third = len(intervals) // 3
+            early_intervals = intervals[:third]
+            middle_intervals = intervals[third:2*third]
+            late_intervals = intervals[2*third:]
+
+            early_median = np.median(early_intervals)
+            middle_median = np.median(middle_intervals)
+            late_median = np.median(late_intervals)
+
+            # Velocity 1: early → middle
+            if early_median > 0:
+                vel1 = (middle_median - early_median) / early_median
+            else:
+                vel1 = 0.0
+
+            # Velocity 2: middle → late
+            if middle_median > 0:
+                vel2 = (late_median - middle_median) / middle_median
+            else:
+                vel2 = 0.0
+
+            # Acceleration = change in velocity
+            acceleration = vel2 - vel1
+        else:
+            acceleration = 0.0
+
+        # Determine trend
+        # Use thresholds: > 0.15 = significant change
+        if velocity < -0.15:
+            trend = 'accelerating'  # Ordering faster
+        elif velocity > 0.15:
+            trend = 'decelerating'  # Ordering slower
+        else:
+            trend = 'stable'
+
+        return {
+            'velocity': round(velocity, 3),
+            'acceleration': round(acceleration, 3),
+            'trend': trend
+        }
