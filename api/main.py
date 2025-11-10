@@ -34,7 +34,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from scripts.improved_hybrid_recommender_v32 import ImprovedHybridRecommenderV32
 from scripts.redis_helper import WeeklyRecommendationCache
+from scripts.forecasting import ForecastEngine
 from api.db_pool import get_connection, close_pool
+from api.models.forecast_schemas import ProductForecastResponse, ForecastErrorResponse
 
 # Configure logging
 logging.basicConfig(
@@ -514,6 +516,119 @@ async def get_weekly_recommendations(customer_id: int):
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
+        )
+
+
+@app.get(
+    "/forecast/{product_id}",
+    response_model=ProductForecastResponse,
+    responses={404: {"model": ForecastErrorResponse}, 500: {"model": ForecastErrorResponse}},
+    tags=["Forecasting"]
+)
+async def get_product_forecast(
+    product_id: int,
+    as_of_date: Optional[str] = Query(
+        None,
+        description="Reference date for forecast (ISO format YYYY-MM-DD). Default: today"
+    ),
+    forecast_weeks: int = Query(
+        12,
+        ge=4,
+        le=26,
+        description="Number of weeks to forecast (4-26, default: 12 = ~3 months)"
+    ),
+    use_cache: bool = Query(
+        True,
+        description="Use Redis cache for performance"
+    )
+):
+    """
+    Generate 3-month product sales forecast
+
+    Returns weekly forecasts with:
+    - Predicted quantities, revenue, order counts
+    - Confidence intervals (95%)
+    - Expected customers per week
+    - At-risk customer identification
+    - Top customer contributions
+
+    Uses customer-based forecasting with Bayesian statistics,
+    Mann-Kendall trend detection, and FFT seasonality analysis.
+
+    **Performance**: ~1-2s for products with 20-40 customers (uses Redis caching)
+
+    **Example**: `/forecast/25367399?forecast_weeks=12&as_of_date=2024-07-01`
+    """
+    start_time = time.time()
+
+    try:
+        # Get connection from pool
+        conn = get_connection()
+
+        try:
+            # Initialize forecast engine
+            engine = ForecastEngine(conn=conn, forecast_weeks=forecast_weeks)
+
+            # Generate forecast (with optional caching)
+            if use_cache and redis_client:
+                forecast = engine.generate_forecast_cached(
+                    product_id=product_id,
+                    redis_client=redis_client,
+                    as_of_date=as_of_date,
+                    cache_ttl=CACHE_TTL
+                )
+            else:
+                forecast = engine.generate_forecast(
+                    product_id=product_id,
+                    as_of_date=as_of_date
+                )
+
+            if forecast is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No predictable customers found for product {product_id}"
+                )
+
+            # Calculate latency
+            latency_ms = (time.time() - start_time) * 1000
+
+            # Update metrics
+            metrics['requests'] += 1
+            metrics['total_latency_ms'] += latency_ms
+
+            # Convert to dict for response
+            response_dict = {
+                'product_id': forecast.product_id,
+                'product_name': None,  # Will be enriched by engine
+                'forecast_period_weeks': forecast.forecast_period_weeks,
+                'summary': forecast.summary,
+                'weekly_forecasts': forecast.weekly_forecasts,
+                'top_customers_by_volume': forecast.top_customers_by_volume,
+                'at_risk_customers': forecast.at_risk_customers,
+                'model_metadata': forecast.model_metadata
+            }
+
+            logger.info(
+                f"Forecast generated for product {product_id}: "
+                f"{forecast.summary['total_predicted_quantity']} units, "
+                f"{latency_ms:.1f}ms"
+            )
+
+            return response_dict
+
+        finally:
+            # Return connection to pool
+            conn.close()
+
+    except HTTPException:
+        metrics['errors'] += 1
+        raise
+    except Exception as e:
+        metrics['errors'] += 1
+        logger.error(f"Error generating forecast for product {product_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal error generating forecast: {str(e)}"
         )
 
 
