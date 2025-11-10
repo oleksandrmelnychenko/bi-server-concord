@@ -426,7 +426,10 @@ class ProductAggregator:
                 'bayesian_inference',
                 'mann_kendall_trend',
                 'fft_seasonality',
-                'survival_analysis'
+                'survival_analysis',
+                'rfm_analysis',
+                'velocity_tracking',
+                'robust_statistics'
             ]
         }
 
