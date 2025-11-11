@@ -601,8 +601,9 @@ async def get_product_forecast(
                 'product_id': forecast.product_id,
                 'product_name': None,  # Will be enriched by engine
                 'forecast_period_weeks': forecast.forecast_period_weeks,
+                'historical_weeks': forecast.historical_weeks,
                 'summary': forecast.summary,
-                'weekly_forecasts': forecast.weekly_forecasts,
+                'weekly_data': forecast.weekly_data,  # Unified timeline (historical + forecast)
                 'top_customers_by_volume': forecast.top_customers_by_volume,
                 'at_risk_customers': forecast.at_risk_customers,
                 'model_metadata': forecast.model_metadata

@@ -13,9 +13,14 @@ Production-grade orchestration with error handling and caching.
 """
 
 import logging
+import sys
 from typing import List, Optional, Dict
 from datetime import datetime
 import json
+
+# Add parent directory to path for datetime_utils
+sys.path.insert(0, '/Users/oleksandrmelnychenko/Projects/Concord-BI-Server/scripts')
+from datetime_utils import parse_as_of_date, format_date_iso
 
 from .pattern_analyzer import PatternAnalyzer, CustomerProductPattern
 from .customer_predictor import CustomerPredictor, CustomerPrediction
@@ -82,9 +87,9 @@ class ForecastEngine:
             ProductForecast or None if no predictable customers
         """
         try:
-            # Default to today if not specified
-            if as_of_date is None:
-                as_of_date = datetime.now().strftime('%Y-%m-%d')
+            # Parse and validate as_of_date with timezone awareness
+            as_of_dt = parse_as_of_date(as_of_date)
+            as_of_date = format_date_iso(as_of_dt)
 
             logger.info(f"Generating forecast for product {product_id} as of {as_of_date}")
 
@@ -160,6 +165,7 @@ class ForecastEngine:
                 product_id=product_id,
                 predictions=predictions,
                 as_of_date=as_of_date,
+                conn=self.conn,  # Pass database connection for historical data
                 product_name=product_info.get('product_name'),
                 unit_price=product_info.get('unit_price')
             )
@@ -276,15 +282,15 @@ class ForecastEngine:
         Enrich forecast with customer names
 
         Adds customer_name field to:
-        - weekly_forecasts.expected_customers
+        - weekly_data.expected_customers
         - top_customers_by_volume
         - at_risk_customers
         """
         # Collect all customer IDs
         customer_ids = set()
 
-        # From weekly forecasts
-        for week in forecast.weekly_forecasts:
+        # From weekly data
+        for week in forecast.weekly_data:
             for cust in week.get('expected_customers', []):
                 customer_ids.add(cust['customer_id'])
 
@@ -302,8 +308,8 @@ class ForecastEngine:
         # Fetch names
         customer_names = self._get_customer_names(list(customer_ids))
 
-        # Enrich weekly forecasts
-        for week in forecast.weekly_forecasts:
+        # Enrich weekly data
+        for week in forecast.weekly_data:
             for cust in week.get('expected_customers', []):
                 cust_id = cust['customer_id']
                 cust['customer_name'] = customer_names.get(
@@ -351,8 +357,9 @@ class ForecastEngine:
         Returns:
             ProductForecast from cache or fresh generation
         """
-        if as_of_date is None:
-            as_of_date = datetime.now().strftime('%Y-%m-%d')
+        # Parse and validate as_of_date with timezone awareness
+        as_of_dt = parse_as_of_date(as_of_date)
+        as_of_date = format_date_iso(as_of_dt)
 
         cache_key = f"forecast:product:{product_id}:{as_of_date}"
 

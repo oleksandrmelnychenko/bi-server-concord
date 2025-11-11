@@ -19,6 +19,11 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
+import sys
+
+# Add parent directory to path for datetime_utils
+sys.path.insert(0, '/Users/oleksandrmelnychenko/Projects/Concord-BI-Server/scripts')
+from datetime_utils import calculate_fractional_days
 
 logger = logging.getLogger(__name__)
 
@@ -279,14 +284,16 @@ class PatternAnalyzer:
 
     def _calculate_reorder_cycles(self, orders: List[Dict]) -> List[float]:
         """
-        Calculate days between consecutive orders
+        Calculate days between consecutive orders with sub-day precision
 
-        Ignores same-day duplicates
+        Uses fractional days for accuracy (e.g., 3.5 days = 3 days 12 hours).
+        Ignores same-day duplicates (< 1 day apart).
         """
         cycles = []
         for i in range(1, len(orders)):
-            days = (orders[i]['date'] - orders[i-1]['date']).days
-            if days > 0:  # Ignore same-day duplicates
+            # Use fractional days for precision instead of integer .days
+            days = calculate_fractional_days(orders[i-1]['date'], orders[i]['date'])
+            if days >= 1.0:  # Ignore orders less than 1 day apart
                 cycles.append(days)
         return cycles
 

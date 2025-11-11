@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
-WEEKLY_TTL = int(os.getenv('WEEKLY_TTL', 691200))  # 8 days (1 week + 1 day buffer)
+WEEKLY_TTL = int(os.getenv('WEEKLY_TTL', 604800))  # 7 days (exactly 1 week) - FIXED from 8 days
 
 
 class WeeklyRecommendationCache:

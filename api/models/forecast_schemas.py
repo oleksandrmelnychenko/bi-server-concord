@@ -22,17 +22,18 @@ class ExpectedCustomer(BaseModel):
 
 
 class WeeklyForecast(BaseModel):
-    """Forecast for a single week"""
+    """Forecast or historical data for a single week"""
     week_start: str = Field(..., description="Week start date (ISO format)")
     week_end: str = Field(..., description="Week end date (ISO format)")
-    predicted_quantity: float = Field(..., description="Predicted total quantity for week")
-    predicted_revenue: float = Field(..., description="Predicted total revenue for week")
-    predicted_orders: float = Field(..., description="Expected number of orders for week")
-    confidence_lower: float = Field(..., description="95% confidence interval lower bound (quantity)")
-    confidence_upper: float = Field(..., description="95% confidence interval upper bound (quantity)")
+    quantity: float = Field(..., description="Quantity for week (actual or predicted)")
+    revenue: float = Field(..., description="Revenue for week (actual or predicted)")
+    orders: float = Field(..., description="Number of orders for week (actual or predicted)")
+    data_type: str = Field(..., description="Data type: 'actual' or 'predicted'")
+    confidence_lower: Optional[float] = Field(None, description="95% CI lower (predictions only)")
+    confidence_upper: Optional[float] = Field(None, description="95% CI upper (predictions only)")
     expected_customers: List[ExpectedCustomer] = Field(
         default_factory=list,
-        description="List of customers expected to order this week (prob >= 15%)"
+        description="List of customers expected to order this week (predictions only, prob >= 15%)"
     )
 
 
@@ -94,9 +95,10 @@ class ProductForecastResponse(BaseModel):
     product_id: int = Field(..., description="Product ID")
     product_name: Optional[str] = Field(None, description="Product name")
     forecast_period_weeks: int = Field(..., description="Number of weeks forecasted")
+    historical_weeks: int = Field(..., description="Number of historical weeks included")
 
     summary: ForecastSummary = Field(..., description="Summary metrics")
-    weekly_forecasts: List[WeeklyForecast] = Field(..., description="Weekly forecast breakdown")
+    weekly_data: List[WeeklyForecast] = Field(..., description="Unified timeline: historical + forecast")
     top_customers_by_volume: List[TopCustomer] = Field(
         default_factory=list,
         description="Top customers by predicted volume"
