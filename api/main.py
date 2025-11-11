@@ -32,8 +32,11 @@ import json
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from scripts.improved_hybrid_recommender import ImprovedHybridRecommender
+from scripts.improved_hybrid_recommender_v32 import ImprovedHybridRecommenderV32
+from scripts.redis_helper import WeeklyRecommendationCache
+from scripts.forecasting import ForecastEngine
 from api.db_pool import get_connection, close_pool
+from api.models.forecast_schemas import ProductForecastResponse, ForecastErrorResponse
 
 # Configure logging
 logging.basicConfig(
@@ -54,6 +57,7 @@ TARGET_P50_MS = 50
 
 # Global state
 redis_client = None
+weekly_cache = None  # WeeklyRecommendationCache for pre-computed weekly recommendations
 # Connection pool is managed by db_pool module (no global recommender needed)
 metrics = {
     'requests': 0,
@@ -67,7 +71,7 @@ metrics = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global redis_client
+    global redis_client, weekly_cache
 
     # Startup
     logger.info("="*60)
@@ -89,6 +93,14 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠ Redis not available: {e}. Running without cache.")
         redis_client = None
 
+    # Initialize Weekly Recommendation Cache
+    try:
+        weekly_cache = WeeklyRecommendationCache()
+        logger.info(f"✓ Weekly recommendation cache initialized")
+    except Exception as e:
+        logger.warning(f"⚠ Weekly cache not available: {e}. Weekly endpoint will use fallback.")
+        weekly_cache = None
+
     # Connection pool is initialized in db_pool module
     logger.info("✓ Database connection pool initialized (20 connections, max 30)")
     logger.info("✓ Improved Hybrid Recommender V3 (75.4% precision@50)")
@@ -101,6 +113,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down API...")
     if redis_client:
         redis_client.close()
+    if weekly_cache:
+        weekly_cache.close()
     close_pool()
     logger.info("✓ Database connection pool closed")
 
@@ -129,6 +143,7 @@ class RecommendationRequest(BaseModel):
     top_n: int = Field(50, ge=1, le=500, description="Number of recommendations to return")
     as_of_date: Optional[str] = Field(None, description="ISO date for point-in-time recommendations (YYYY-MM-DD)")
     use_cache: bool = Field(True, description="Whether to use Redis cache")
+    include_discovery: bool = Field(True, description="Whether to include collaborative filtering for new product discovery (V3.1)")
 
     class Config:
         json_schema_extra = {
@@ -136,7 +151,8 @@ class RecommendationRequest(BaseModel):
                 "customer_id": 410376,
                 "top_n": 50,
                 "as_of_date": "2024-07-01",
-                "use_cache": True
+                "use_cache": True,
+                "include_discovery": True
             }
         }
 
@@ -145,6 +161,7 @@ class RecommendationResponse(BaseModel):
     customer_id: int
     recommendations: List[Dict[str, Any]]
     count: int
+    discovery_count: int = Field(0, description="Number of recommendations that are NEW products (not previously purchased)")
     precision_estimate: float = Field(0.754, description="Expected precision@50 based on validation (Heavy: 89.2%, Regular: 88.2%, Light: 54.1%)")
     latency_ms: float
     cached: bool
@@ -231,9 +248,43 @@ async def get_metrics():
 
 
 def get_cache_key(customer_id: int, top_n: int, as_of_date: Optional[datetime]) -> str:
-    """Generate Redis cache key"""
+    """Generate Redis cache key for ad-hoc requests"""
     date_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else 'latest'
     return f"recs:v1:{customer_id}:{top_n}:{date_str}"
+
+
+def get_worker_cache_key(customer_id: int, as_of_date: str) -> str:
+    """
+    Generate Redis cache key for weekly worker pre-computed recommendations.
+    Must match the format used in weekly_recommendation_worker.py
+
+    Format: recommendations:customer:{customer_id}:{as_of_date}
+    Example: recommendations:customer:410376:2024-07-01
+    """
+    return f"recommendations:customer:{customer_id}:{as_of_date}"
+
+
+def get_from_worker_cache(customer_id: int, as_of_date: str) -> Optional[Dict[str, Any]]:
+    """
+    Get pre-computed recommendations from weekly worker cache.
+    Returns full result dict with metadata, not just recommendations list.
+    """
+    if not redis_client:
+        return None
+
+    try:
+        cache_key = get_worker_cache_key(customer_id, as_of_date)
+        cached = redis_client.get(cache_key)
+        if cached:
+            metrics['cache_hits'] += 1
+            logger.debug(f"Worker Cache HIT: {cache_key}")
+            return json.loads(cached)
+        else:
+            logger.debug(f"Worker Cache MISS: {cache_key}")
+            return None
+    except Exception as e:
+        logger.warning(f"Worker cache read error: {e}")
+        return None
 
 
 def get_from_cache(cache_key: str) -> Optional[List[Dict]]:
@@ -275,14 +326,19 @@ def set_in_cache(cache_key: str, recommendations: List[Dict], ttl: int = CACHE_T
 @app.post("/recommend", response_model=RecommendationResponse, tags=["Recommendations"])
 async def get_recommendations(request: RecommendationRequest):
     """
-    Generate product recommendations for a customer
+    Generate product recommendations for a customer (V3.1 with discovery)
 
     Returns top-N product recommendations with expected 75.4% precision@50
     - Heavy users (500+ orders): 89.2% precision
     - Regular users (100-500 orders): 88.2% precision
     - Light users (<100 orders): 54.1% precision
 
-    Performance: <400ms P99 latency with concurrent request support (20+ concurrent users)
+    NEW in V3.1: Collaborative filtering for new product discovery
+    - Recommends BOTH repurchase products AND new products customer hasn't bought
+    - Finds similar customers using Jaccard similarity
+    - Segment-specific blending (Heavy: 80% repurchase, Light: 60% discovery)
+
+    Performance: <2s latency (acceptable for quality improvement)
     """
     start_time = time.time()
     metrics['requests'] += 1
@@ -299,14 +355,34 @@ async def get_recommendations(request: RecommendationRequest):
                     detail=f"Invalid date format: {request.as_of_date}. Use YYYY-MM-DD"
                 )
 
-        # Check cache
+        # Check caches (worker cache first, then ad-hoc cache)
         cached = False
+        from_worker = False
         recommendations = None
+
+        # Convert datetime to string for cache key
+        as_of_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else datetime.now().strftime('%Y-%m-%d')
+
         if request.use_cache:
-            cache_key = get_cache_key(request.customer_id, request.top_n, as_of_date)
-            recommendations = get_from_cache(cache_key)
-            if recommendations:
+            # 1. Try worker cache first (pre-computed weekly recommendations)
+            worker_result = get_from_worker_cache(request.customer_id, as_of_str)
+            if worker_result:
+                # Worker cache stores full result dict, extract recommendations
+                recommendations = worker_result.get('recommendations', [])
+                # If top_n requested is different, truncate
+                if len(recommendations) > request.top_n:
+                    recommendations = recommendations[:request.top_n]
                 cached = True
+                from_worker = True
+                logger.info(f"✅ Served from worker cache: customer {request.customer_id}")
+
+            # 2. If not in worker cache, try ad-hoc cache
+            if recommendations is None:
+                cache_key = get_cache_key(request.customer_id, request.top_n, as_of_date)
+                recommendations = get_from_cache(cache_key)
+                if recommendations:
+                    cached = True
+                    logger.debug(f"Served from ad-hoc cache: customer {request.customer_id}")
 
         # Generate recommendations if not cached
         if recommendations is None:
@@ -314,14 +390,14 @@ async def get_recommendations(request: RecommendationRequest):
             conn = get_connection()
             try:
                 # Create recommender instance with pooled connection
-                recommender = ImprovedHybridRecommender(conn=conn)
+                recommender = ImprovedHybridRecommenderV32(conn=conn, use_cache=request.use_cache)
 
-                # Convert datetime to string format expected by improved recommender
-                as_of_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else datetime.now().strftime('%Y-%m-%d')
+                # as_of_str already defined above for cache keys
                 recommendations = recommender.get_recommendations(
                     customer_id=request.customer_id,
                     as_of_date=as_of_str,
-                    top_n=request.top_n
+                    top_n=request.top_n,
+                    include_discovery=request.include_discovery
                 )
             finally:
                 # Return connection to pool
@@ -335,6 +411,9 @@ async def get_recommendations(request: RecommendationRequest):
         latency_ms = (time.time() - start_time) * 1000
         metrics['total_latency_ms'] += latency_ms
 
+        # Count discovery recommendations
+        discovery_count = sum(1 for r in recommendations if r.get('source') in ['discovery', 'hybrid'])
+
         # Log slow requests
         if latency_ms > TARGET_P99_MS:
             logger.warning(f"Slow request: {latency_ms:.2f}ms (customer: {request.customer_id})")
@@ -343,6 +422,7 @@ async def get_recommendations(request: RecommendationRequest):
             customer_id=request.customer_id,
             recommendations=recommendations,
             count=len(recommendations),
+            discovery_count=discovery_count,
             precision_estimate=0.754,  # From Improved V3 validation (50-customer test)
             latency_ms=round(latency_ms, 2),
             cached=cached,
@@ -357,6 +437,199 @@ async def get_recommendations(request: RecommendationRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
+        )
+
+
+@app.get("/weekly-recommendations/{customer_id}", tags=["Recommendations"])
+async def get_weekly_recommendations(customer_id: int):
+    """
+    Get pre-computed weekly recommendations for a customer (fast retrieval from Redis).
+
+    This endpoint returns 25 product recommendations that were pre-computed by the
+    weekly recommendation worker job. Recommendations are unique per week and include
+    a mix of repurchase products (old) and discovery products (new).
+
+    Performance: <10ms latency (cached in Redis)
+    Fallback: If cache miss, generates on-demand (slower, ~2s)
+
+    Returns:
+        - customer_id: Customer ID
+        - week: Week identifier (e.g., "2025_W45")
+        - recommendations: List of 25 product recommendations
+        - cached: Whether from cache (True) or generated on-demand (False)
+        - latency_ms: Response time
+    """
+    start_time = time.time()
+
+    try:
+        # Try to get from weekly cache first
+        recommendations = None
+        week_key = None
+        cached = False
+
+        if weekly_cache:
+            week_key = weekly_cache.get_week_key()
+            recommendations = weekly_cache.get_recommendations(customer_id)
+
+            if recommendations:
+                cached = True
+                logger.debug(f"Weekly cache HIT for customer {customer_id} (week {week_key})")
+            else:
+                logger.debug(f"Weekly cache MISS for customer {customer_id} (week {week_key})")
+
+        # Fallback: Generate on-demand if not in cache
+        if recommendations is None:
+            logger.info(f"Generating on-demand recommendations for customer {customer_id}")
+
+            conn = get_connection()
+            try:
+                recommender = ImprovedHybridRecommenderV32(conn=conn, use_cache=True)
+                as_of_date = datetime.now().strftime('%Y-%m-%d')
+                recommendations = recommender.get_recommendations(
+                    customer_id=customer_id,
+                    as_of_date=as_of_date,
+                    top_n=25,
+                    include_discovery=True
+                )
+            finally:
+                conn.close()
+
+        # Calculate latency
+        latency_ms = (time.time() - start_time) * 1000
+
+        # Count discovery recommendations
+        discovery_count = sum(1 for r in recommendations if r.get('source') in ['discovery', 'hybrid'])
+
+        return {
+            "customer_id": customer_id,
+            "week": week_key or weekly_cache.get_week_key() if weekly_cache else "unknown",
+            "recommendations": recommendations,
+            "count": len(recommendations),
+            "discovery_count": discovery_count,
+            "cached": cached,
+            "latency_ms": round(latency_ms, 2),
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting weekly recommendations: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
+@app.get(
+    "/forecast/{product_id}",
+    response_model=ProductForecastResponse,
+    responses={404: {"model": ForecastErrorResponse}, 500: {"model": ForecastErrorResponse}},
+    tags=["Forecasting"]
+)
+async def get_product_forecast(
+    product_id: int,
+    as_of_date: Optional[str] = Query(
+        None,
+        description="Reference date for forecast (ISO format YYYY-MM-DD). Default: today"
+    ),
+    forecast_weeks: int = Query(
+        12,
+        ge=4,
+        le=26,
+        description="Number of weeks to forecast (4-26, default: 12 = ~3 months)"
+    ),
+    use_cache: bool = Query(
+        True,
+        description="Use Redis cache for performance"
+    )
+):
+    """
+    Generate 3-month product sales forecast
+
+    Returns weekly forecasts with:
+    - Predicted quantities, revenue, order counts
+    - Confidence intervals (95%)
+    - Expected customers per week
+    - At-risk customer identification
+    - Top customer contributions
+
+    Uses customer-based forecasting with Bayesian statistics,
+    Mann-Kendall trend detection, and FFT seasonality analysis.
+
+    **Performance**: ~1-2s for products with 20-40 customers (uses Redis caching)
+
+    **Example**: `/forecast/25367399?forecast_weeks=12&as_of_date=2024-07-01`
+    """
+    start_time = time.time()
+
+    try:
+        # Get connection from pool
+        conn = get_connection()
+
+        try:
+            # Initialize forecast engine
+            engine = ForecastEngine(conn=conn, forecast_weeks=forecast_weeks)
+
+            # Generate forecast (with optional caching)
+            if use_cache and redis_client:
+                forecast = engine.generate_forecast_cached(
+                    product_id=product_id,
+                    redis_client=redis_client,
+                    as_of_date=as_of_date,
+                    cache_ttl=CACHE_TTL
+                )
+            else:
+                forecast = engine.generate_forecast(
+                    product_id=product_id,
+                    as_of_date=as_of_date
+                )
+
+            if forecast is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No predictable customers found for product {product_id}"
+                )
+
+            # Calculate latency
+            latency_ms = (time.time() - start_time) * 1000
+
+            # Update metrics
+            metrics['requests'] += 1
+            metrics['total_latency_ms'] += latency_ms
+
+            # Convert to dict for response
+            response_dict = {
+                'product_id': forecast.product_id,
+                'product_name': None,  # Will be enriched by engine
+                'forecast_period_weeks': forecast.forecast_period_weeks,
+                'historical_weeks': forecast.historical_weeks,
+                'summary': forecast.summary,
+                'weekly_data': forecast.weekly_data,  # Unified timeline (historical + forecast)
+                'top_customers_by_volume': forecast.top_customers_by_volume,
+                'at_risk_customers': forecast.at_risk_customers,
+                'model_metadata': forecast.model_metadata
+            }
+
+            logger.info(
+                f"Forecast generated for product {product_id}: "
+                f"{forecast.summary['total_predicted_quantity']} units, "
+                f"{latency_ms:.1f}ms"
+            )
+
+            return response_dict
+
+        finally:
+            # Return connection to pool
+            conn.close()
+
+    except HTTPException:
+        metrics['errors'] += 1
+        raise
+    except Exception as e:
+        metrics['errors'] += 1
+        logger.error(f"Error generating forecast for product {product_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal error generating forecast: {str(e)}"
         )
 
 

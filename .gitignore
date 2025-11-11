@@ -1,38 +1,21 @@
-# Environment
-.env
-*.env
-!.env.example
-
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-venv/
 env/
+venv/
 ENV/
-.venv
+*.egg-info/
+dist/
+build/
 
-# Data
-data/raw/*
-data/delta/*
-data/features/*
-!data/**/.gitkeep
+# Environment
+.env
+.env.local
 
-# ML Models
-models/**/*.pkl
-models/**/*.joblib
-models/**/*.h5
-models/**/*.pth
-mlruns/
-artifacts/
-
-# Logs
-*.log
-logs/
-
-# IDEs
+# IDE
 .vscode/
 .idea/
 *.swp
@@ -43,14 +26,29 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
+# Logs
+*.log
+workers/logs/
+workers/*.log
+workers/worker_stats_*.json
+
+# Test/Analysis outputs
+analysis_*.json
+*.json
+!requirements.txt
+!package.json
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
+
+# Database
+*.db
+*.sqlite
+
+# Redis
+dump.rdb
 
 # Docker
-docker-compose.override.yml
-
-# Secrets
-secrets/
-*.key
-*.pem
+.dockerignore
