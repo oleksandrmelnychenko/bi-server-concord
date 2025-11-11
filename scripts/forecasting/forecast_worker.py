@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""
-Forecast Worker - Background Service for Pre-computing Product Forecasts
-
-Processes all forecastable products and stores results in Redis cache.
-Can run as standalone script or scheduled Docker service.
-
-Usage:
-    python3 scripts/forecasting/forecast_worker.py
-    docker-compose run forecast-worker
-
-Performance:
-    - Parallel processing with multiprocessing
-    - ~10,000 products in 8-10 minutes (10 workers)
-    - Progress updates every 100 products
-    - Stores results in Redis with 7-day TTL
-"""
 
 import os
 import sys
@@ -25,20 +9,17 @@ from multiprocessing import Pool, Manager
 from typing import List, Dict, Tuple
 import redis
 
-# Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 from api.db_pool import get_connection, close_pool
 from scripts.forecasting import ForecastEngine
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Configuration from environment
 AS_OF_DATE = os.getenv('AS_OF_DATE', datetime.now().strftime('%Y-%m-%d'))
 REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
@@ -48,25 +29,13 @@ NUM_WORKERS = int(os.getenv('FORECAST_WORKERS', 10))
 MIN_CUSTOMERS = int(os.getenv('FORECAST_MIN_CUSTOMERS', 2))
 MIN_ORDERS = int(os.getenv('FORECAST_MIN_ORDERS', 3))
 
-
-# Global function for multiprocessing (must be picklable)
 def _process_product_worker(args: Tuple[int, int, int, str, int]) -> Dict:
-    """
-    Worker function for multiprocessing pool
-
-    Args:
-        args: (product_id, index, total_count, as_of_date, cache_ttl)
-
-    Returns:
-        Dict with processing results
-    """
     product_id, index, total_count, as_of_date, cache_ttl = args
 
     try:
-        # Each worker process needs its own connections (can't pickle thread locks)
+
         conn = get_connection()
 
-        # Create fresh Redis client for this worker process
         redis_client = redis.Redis(
             host=REDIS_HOST,
             port=REDIS_PORT,
@@ -76,10 +45,9 @@ def _process_product_worker(args: Tuple[int, int, int, str, int]) -> Dict:
         )
 
         try:
-            # Initialize forecast engine
+
             engine = ForecastEngine(conn=conn, forecast_weeks=12)
 
-            # Generate forecast
             start_time = time.time()
             forecast = engine.generate_forecast_cached(
                 product_id=product_id,
@@ -90,7 +58,7 @@ def _process_product_worker(args: Tuple[int, int, int, str, int]) -> Dict:
             elapsed = time.time() - start_time
 
             if forecast:
-                # Log progress every 100 products
+
                 if (index + 1) % 100 == 0:
                     logger.info(
                         f"Progress: {index + 1}/{total_count} "
@@ -117,7 +85,7 @@ def _process_product_worker(args: Tuple[int, int, int, str, int]) -> Dict:
                 }
 
         finally:
-            # Close connections
+
             conn.close()
             redis_client.close()
 
@@ -129,21 +97,15 @@ def _process_product_worker(args: Tuple[int, int, int, str, int]) -> Dict:
             'error': str(e)
         }
 
-
 class ForecastWorker:
-    """
-    Background worker for batch forecasting all products
-    """
 
     def __init__(self):
-        """Initialize worker"""
         self.as_of_date = AS_OF_DATE
         self.cache_ttl = CACHE_TTL
         self.num_workers = NUM_WORKERS
         self.min_customers = MIN_CUSTOMERS
         self.min_orders = MIN_ORDERS
 
-        # Initialize Redis
         try:
             self.redis_client = redis.Redis(
                 host=REDIS_HOST,
@@ -164,17 +126,6 @@ class ForecastWorker:
         logger.info(f"  Cache TTL: {self.cache_ttl}s ({self.cache_ttl // 86400} days)")
 
     def get_forecastable_products(self) -> List[int]:
-        """
-        Get all products that can be forecasted
-
-        Criteria:
-        - At least MIN_CUSTOMERS unique customers
-        - At least MIN_ORDERS total orders
-        - Historical data from 2019 to AS_OF_DATE
-
-        Returns:
-            List of product IDs
-        """
         logger.info("Fetching forecastable products from database...")
 
         conn = get_connection()
@@ -204,19 +155,12 @@ class ForecastWorker:
         return products
 
     def run(self) -> Dict:
-        """
-        Main worker execution
-
-        Returns:
-            Summary statistics
-        """
         start_time = time.time()
 
         logger.info("="*80)
         logger.info("FORECAST WORKER STARTING")
         logger.info("="*80)
 
-        # Get all forecastable products
         products = self.get_forecastable_products()
 
         if not products:
@@ -230,8 +174,6 @@ class ForecastWorker:
                 'elapsed_seconds': 0
             }
 
-        # Prepare arguments for parallel processing
-        # Include as_of_date and cache_ttl for worker function
         args_list = [
             (pid, idx, len(products), self.as_of_date, self.cache_ttl)
             for idx, pid in enumerate(products)
@@ -240,12 +182,10 @@ class ForecastWorker:
         logger.info(f"Starting parallel processing with {self.num_workers} workers...")
         logger.info(f"Processing {len(products):,} products...")
 
-        # Process in parallel using global function (picklable)
         results = []
         with Pool(processes=self.num_workers) as pool:
             results = pool.map(_process_product_worker, args_list)
 
-        # Calculate statistics
         total_elapsed = time.time() - start_time
 
         successful = sum(1 for r in results if r['status'] == 'success')
@@ -256,7 +196,6 @@ class ForecastWorker:
         avg_customers = sum(r.get('customers', 0) for r in results if r['status'] == 'success') / max(1, successful)
         avg_confidence = sum(r.get('confidence', 0) for r in results if r['status'] == 'success') / max(1, successful)
 
-        # Print summary
         logger.info("="*80)
         logger.info("FORECAST WORKER COMPLETED")
         logger.info("="*80)
@@ -273,7 +212,6 @@ class ForecastWorker:
         logger.info(f"Avg Time per Product: {total_elapsed/len(products):.2f}s")
         logger.info("="*80)
 
-        # Store metadata in Redis
         metadata = {
             'last_run': datetime.now().isoformat(),
             'as_of_date': self.as_of_date,
@@ -297,14 +235,11 @@ class ForecastWorker:
 
         return metadata
 
-
 def main():
-    """Main entry point"""
     try:
         worker = ForecastWorker()
         result = worker.run()
 
-        # Exit with appropriate status
         if result['failed'] > 0:
             logger.warning(f"{result['failed']} products failed to process")
             sys.exit(1)
@@ -319,13 +254,12 @@ def main():
         logger.error(f"Worker failed with error: {e}", exc_info=True)
         sys.exit(1)
     finally:
-        # Close database pool
+
         try:
             close_pool()
             logger.info("Database connection pool closed")
         except:
             pass
-
 
 if __name__ == "__main__":
     main()

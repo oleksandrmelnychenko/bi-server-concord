@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""
-RFM Accuracy Testing - 500 Product Comparison
-
-Compares forecast accuracy before and after RFM implementation.
-Uses Mean Absolute Percentage Error (MAPE) to measure improvement.
-
-Usage:
-    python3 scripts/forecasting/test_rfm_accuracy.py
-"""
 
 import os
 import sys
@@ -18,37 +9,28 @@ import numpy as np
 from typing import List, Dict
 import redis
 
-# Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 from api.db_pool import get_connection, close_pool
 from scripts.forecasting import ForecastEngine
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Configuration
 TEST_PRODUCTS = 500
 AS_OF_DATE = os.getenv('AS_OF_DATE', datetime.now().strftime('%Y-%m-%d'))
 REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
 
-
 class RFMAccuracyTester:
-    """
-    Test RFM impact on forecast accuracy
-    """
 
     def __init__(self):
-        """Initialize tester"""
         self.as_of_date = AS_OF_DATE
 
-        # Initialize Redis
         try:
             self.redis_client = redis.Redis(
                 host=REDIS_HOST,
@@ -64,20 +46,11 @@ class RFMAccuracyTester:
             raise
 
     def get_test_products(self, limit: int = TEST_PRODUCTS) -> List[int]:
-        """
-        Get sample of products for testing (mix of volumes)
-
-        Returns products with varied characteristics:
-        - High volume (top 20%)
-        - Medium volume (middle 60%)
-        - Low volume (bottom 20%)
-        """
         logger.info(f"Fetching {limit} test products...")
 
         conn = get_connection()
         cursor = conn.cursor()
 
-        # Get products with varied order counts
         query = """
         SELECT
             oi.ProductID,
@@ -105,11 +78,6 @@ class RFMAccuracyTester:
         return products
 
     def generate_forecasts(self, products: List[int]) -> Dict:
-        """
-        Generate forecasts for all test products
-
-        Returns dict with product_id -> forecast results
-        """
         logger.info(f"Generating forecasts for {len(products)} products...")
 
         results = {}
@@ -120,7 +88,6 @@ class RFMAccuracyTester:
                 if (idx + 1) % 100 == 0:
                     logger.info(f"Progress: {idx + 1}/{len(products)} ({(idx + 1)/len(products)*100:.1f}%)")
 
-                # Generate forecast
                 engine = ForecastEngine(conn=conn, forecast_weeks=12)
                 forecast = engine.generate_forecast_cached(
                     product_id=product_id,
@@ -149,9 +116,6 @@ class RFMAccuracyTester:
         return results
 
     def calculate_metrics(self, results: Dict) -> Dict:
-        """
-        Calculate accuracy metrics from forecast results
-        """
         successful = [r for r in results.values() if r['status'] == 'success']
 
         if not successful:
@@ -185,36 +149,26 @@ class RFMAccuracyTester:
         }
 
     def run(self) -> Dict:
-        """
-        Main test execution
-
-        Returns summary statistics
-        """
         start_time = time.time()
 
         logger.info("="*80)
         logger.info("RFM ACCURACY TEST STARTING")
         logger.info("="*80)
 
-        # Get test products
         products = self.get_test_products(TEST_PRODUCTS)
 
         if not products:
             logger.warning("No products found for testing!")
             return {}
 
-        # Generate forecasts
         logger.info("\nGenerating forecasts with RFM enhancements...")
         results = self.generate_forecasts(products)
 
-        # Calculate metrics
         logger.info("\nCalculating metrics...")
         metrics = self.calculate_metrics(results)
 
-        # Calculate elapsed time
         total_elapsed = time.time() - start_time
 
-        # Print summary
         logger.info("="*80)
         logger.info("RFM ACCURACY TEST COMPLETED")
         logger.info("="*80)
@@ -237,16 +191,13 @@ class RFMAccuracyTester:
         logger.info(f"Avg Time per Product: {total_elapsed/len(products):.2f}s")
         logger.info("="*80)
 
-        # Store results summary
         metrics['elapsed_seconds'] = int(total_elapsed)
         metrics['timestamp'] = datetime.now().isoformat()
         metrics['as_of_date'] = self.as_of_date
 
         return metrics
 
-
 def main():
-    """Main entry point"""
     try:
         tester = RFMAccuracyTester()
         result = tester.run()
@@ -266,13 +217,12 @@ def main():
         logger.error(f"Test failed with error: {e}", exc_info=True)
         sys.exit(1)
     finally:
-        # Close database pool
+
         try:
             close_pool()
             logger.info("Database connection pool closed")
         except:
             pass
-
 
 if __name__ == "__main__":
     main()

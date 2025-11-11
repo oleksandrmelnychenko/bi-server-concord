@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
-"""
-Pydantic models for Product Forecasting API
-
-Matches the exact API response format specified by user requirements.
-"""
 
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
-
 class ExpectedCustomer(BaseModel):
-    """Customer expected to order in a specific week"""
     customer_id: int = Field(..., description="Customer ID")
     customer_name: str = Field(..., description="Customer name")
     probability: float = Field(..., ge=0, le=1, description="Probability of ordering this week")
@@ -20,9 +13,7 @@ class ExpectedCustomer(BaseModel):
     days_since_last_order: int = Field(..., description="Days since last order")
     avg_reorder_cycle: float = Field(..., description="Average reorder cycle in days")
 
-
 class WeeklyForecast(BaseModel):
-    """Forecast or historical data for a single week"""
     week_start: str = Field(..., description="Week start date (ISO format)")
     week_end: str = Field(..., description="Week end date (ISO format)")
     quantity: float = Field(..., description="Quantity for week (actual or predicted)")
@@ -36,26 +27,20 @@ class WeeklyForecast(BaseModel):
         description="List of customers expected to order this week (predictions only, prob >= 15%)"
     )
 
-
 class ForecastSummary(BaseModel):
-    """Summary metrics across entire forecast period"""
     total_predicted_quantity: float = Field(..., description="Total predicted quantity for period")
     total_predicted_revenue: float = Field(..., description="Total predicted revenue for period")
     total_predicted_orders: float = Field(..., description="Total expected orders for period")
     active_customers: int = Field(..., description="Number of active customers")
     at_risk_customers: int = Field(..., description="Number of at-risk customers")
 
-
 class TopCustomer(BaseModel):
-    """Top customer by predicted volume"""
     customer_id: int = Field(..., description="Customer ID")
     customer_name: str = Field(..., description="Customer name")
     predicted_quantity: float = Field(..., description="Total predicted quantity for period")
     contribution_pct: float = Field(..., description="Percentage contribution to total volume")
 
-
 class AtRiskCustomer(BaseModel):
-    """Customer at risk of churn"""
     customer_id: int = Field(..., description="Customer ID")
     customer_name: str = Field(..., description="Customer name")
     last_order: str = Field(..., description="Date of last order (ISO format)")
@@ -67,9 +52,7 @@ class AtRiskCustomer(BaseModel):
         description="Recommended action: 'urgent_outreach_required', 'proactive_outreach_recommended', 'monitor_closely'"
     )
 
-
 class ModelMetadata(BaseModel):
-    """Model metadata and statistics"""
     model_type: str = Field(default="customer_based_aggregate", description="Model type")
     training_customers: int = Field(..., description="Number of customers used for training")
     forecast_accuracy_estimate: float = Field(
@@ -85,13 +68,7 @@ class ModelMetadata(BaseModel):
         description="Statistical methods used"
     )
 
-
 class ProductForecastResponse(BaseModel):
-    """
-    Complete product forecast response
-
-    Matches exact API format specified by user requirements.
-    """
     product_id: int = Field(..., description="Product ID")
     product_name: Optional[str] = Field(None, description="Product name")
     forecast_period_weeks: int = Field(..., description="Number of weeks forecasted")
@@ -179,9 +156,7 @@ class ProductForecastResponse(BaseModel):
             }
         }
 
-
 class ForecastErrorResponse(BaseModel):
-    """Error response for forecast API"""
     error: str = Field(..., description="Error message")
     detail: Optional[str] = Field(None, description="Detailed error information")
     product_id: Optional[int] = Field(None, description="Product ID that caused error")

@@ -1,5 +1,3 @@
-"""Core forecasting modules"""
-
 from .pattern_analyzer import PatternAnalyzer, CustomerProductPattern
 from .customer_predictor import CustomerPredictor, CustomerPrediction
 from .product_aggregator import ProductAggregator

@@ -1,13 +1,8 @@
-"""
-Pydantic schemas for recommendation API
-"""
-
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
 class RecommendationFilters(BaseModel):
-    """Filters for recommendation request"""
     in_stock_only: bool = Field(
         default=False,
         description="Only recommend products that are currently active (sold in last 30 days)"
@@ -18,7 +13,6 @@ class RecommendationFilters(BaseModel):
     )
 
 class RecommendationRequest(BaseModel):
-    """Request body for recommendations"""
     num_recommendations: int = Field(
         default=20,
         ge=1,
@@ -31,14 +25,12 @@ class RecommendationRequest(BaseModel):
     )
 
 class ProductMetadata(BaseModel):
-    """Product metadata in recommendation"""
     price: Optional[float] = Field(description="Current product price")
     num_analogues: int = Field(description="Number of alternative products available")
     times_ordered: int = Field(description="How many times this product has been ordered")
     product_status: str = Field(description="Product status (Active, Slow Moving, etc.)")
 
 class ProductRecommendation(BaseModel):
-    """Single product recommendation"""
     product_id: str = Field(description="Unique product identifier")
     product_name: str = Field(description="Product name")
     score: float = Field(description="Recommendation score (higher = more relevant)")
@@ -46,14 +38,12 @@ class ProductRecommendation(BaseModel):
     metadata: ProductMetadata = Field(description="Additional product information")
 
 class RecommendationMetadata(BaseModel):
-    """Metadata about the recommendation response"""
     model_version: str = Field(description="Model version used for recommendations")
     generated_at: datetime = Field(description="When recommendations were generated")
     num_results: int = Field(description="Number of recommendations returned")
     filtered: RecommendationFilters = Field(description="Filters that were applied")
 
 class RecommendationResponse(BaseModel):
-    """Response with product recommendations"""
     customer_id: str = Field(description="Customer ID recommendations are for")
     recommendations: List[ProductRecommendation] = Field(description="List of recommended products")
     metadata: RecommendationMetadata = Field(description="Response metadata")
@@ -89,6 +79,5 @@ class RecommendationResponse(BaseModel):
         }
 
 class ErrorResponse(BaseModel):
-    """Error response"""
     error: str = Field(description="Error message")
     detail: Optional[str] = Field(default=None, description="Detailed error information")

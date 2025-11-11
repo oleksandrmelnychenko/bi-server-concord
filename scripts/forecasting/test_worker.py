@@ -1,53 +1,29 @@
 #!/usr/bin/env python3
-"""
-Test Worker - Limited batch test for forecast worker validation
-
-Tests the forecast worker with a small batch of products to validate:
-- Database connectivity
-- Redis caching
-- Parallel processing
-- Error handling
-
-Usage:
-    python3 scripts/forecasting/test_worker.py [limit]
-
-    limit: Number of products to test (default: 50)
-"""
 
 import os
 import sys
 import time
 import logging
 
-# Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 from scripts.forecasting.forecast_worker import ForecastWorker
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-
 def test_worker(limit: int = 50):
-    """
-    Test worker with limited batch
-
-    Args:
-        limit: Number of products to process (default 50)
-    """
     logger.info("="*80)
     logger.info(f"FORECAST WORKER TEST - {limit} PRODUCTS")
     logger.info("="*80)
 
     try:
-        # Initialize worker
+
         worker = ForecastWorker()
 
-        # Get forecastable products
         all_products = worker.get_forecastable_products()
 
         if not all_products:
@@ -56,20 +32,16 @@ def test_worker(limit: int = 50):
 
         logger.info(f"Total forecastable products: {len(all_products):,}")
 
-        # Limit to test batch
         test_products = all_products[:limit]
         logger.info(f"Testing with {len(test_products)} products")
 
-        # Override to test only limited products
         original_get_products = worker.get_forecastable_products
         worker.get_forecastable_products = lambda: test_products
 
-        # Run worker
         start_time = time.time()
         result = worker.run()
         elapsed = time.time() - start_time
 
-        # Print test results
         logger.info("="*80)
         logger.info("TEST RESULTS")
         logger.info("="*80)
@@ -94,10 +66,8 @@ def test_worker(limit: int = 50):
         logger.error(f"Test failed: {e}", exc_info=True)
         sys.exit(1)
 
-
 def main():
-    """Main entry point"""
-    limit = 50  # Default
+    limit = 50
 
     if len(sys.argv) > 1:
         try:
@@ -107,7 +77,6 @@ def main():
             sys.exit(1)
 
     test_worker(limit)
-
 
 if __name__ == "__main__":
     main()

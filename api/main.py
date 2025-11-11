@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""
-Production Recommendation API - Enterprise Grade (Improved V3 + Connection Pooling)
-
-FastAPI service for B2B product recommendations with segment-specific strategies
-- 75.4% precision@50 overall (Heavy: 89.2%, Regular: 88.2%, Light: 54.1%)
-- Connection pooling for concurrent request support (20+ concurrent users)
-- <400ms P99 latency under concurrent load
-- Redis caching for hot customers
-- Comprehensive monitoring & logging
-
-Usage:
-    uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
-"""
 
 import os
 import sys
@@ -29,7 +16,6 @@ from pydantic import BaseModel, Field
 import redis
 import json
 
-# Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from scripts.improved_hybrid_recommender_v32 import ImprovedHybridRecommenderV32
@@ -38,27 +24,23 @@ from scripts.forecasting import ForecastEngine
 from api.db_pool import get_connection, close_pool
 from api.models.forecast_schemas import ProductForecastResponse, ForecastErrorResponse
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Redis configuration
 REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')  # Use 127.0.0.1 instead of localhost
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
 CACHE_TTL = int(os.getenv('CACHE_TTL', 3600))  # 1 hour default
 
-# Performance targets
 TARGET_P99_MS = 100
 TARGET_P50_MS = 50
 
-# Global state
 redis_client = None
-weekly_cache = None  # WeeklyRecommendationCache for pre-computed weekly recommendations
-# Connection pool is managed by db_pool module (no global recommender needed)
+weekly_cache = None
+
 metrics = {
     'requests': 0,
     'cache_hits': 0,
@@ -67,18 +49,14 @@ metrics = {
     'total_latency_ms': 0
 }
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown events"""
     global redis_client, weekly_cache
 
-    # Startup
     logger.info("="*60)
     logger.info("Starting Production Recommendation API")
     logger.info("="*60)
 
-    # Initialize Redis
     try:
         redis_client = redis.Redis(
             host=REDIS_HOST,
@@ -93,7 +71,6 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠ Redis not available: {e}. Running without cache.")
         redis_client = None
 
-    # Initialize Weekly Recommendation Cache
     try:
         weekly_cache = WeeklyRecommendationCache()
         logger.info(f"✓ Weekly recommendation cache initialized")
@@ -101,7 +78,6 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠ Weekly cache not available: {e}. Weekly endpoint will use fallback.")
         weekly_cache = None
 
-    # Connection pool is initialized in db_pool module
     logger.info("✓ Database connection pool initialized (20 connections, max 30)")
     logger.info("✓ Improved Hybrid Recommender V3 (75.4% precision@50)")
     logger.info("✓ API ready to serve concurrent requests")
@@ -109,7 +85,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown
     logger.info("Shutting down API...")
     if redis_client:
         redis_client.close()
@@ -118,8 +93,6 @@ async def lifespan(app: FastAPI):
     close_pool()
     logger.info("✓ Database connection pool closed")
 
-
-# Initialize FastAPI
 app = FastAPI(
     title="B2B Product Recommendation API",
     description="Enterprise-grade recommendation service with 75.4% precision@50 (Improved V3 + Connection Pooling)",
@@ -127,7 +100,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Configure for your domains in production
@@ -136,8 +108,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# Request/Response models
 class RecommendationRequest(BaseModel):
     customer_id: int = Field(..., description="Customer ID to generate recommendations for")
     top_n: int = Field(50, ge=1, le=500, description="Number of recommendations to return")
@@ -156,7 +126,6 @@ class RecommendationRequest(BaseModel):
             }
         }
 
-
 class RecommendationResponse(BaseModel):
     customer_id: int
     recommendations: List[Dict[str, Any]]
@@ -167,7 +136,6 @@ class RecommendationResponse(BaseModel):
     cached: bool
     timestamp: str
 
-
 class HealthResponse(BaseModel):
     status: str
     version: str
@@ -175,7 +143,6 @@ class HealthResponse(BaseModel):
     metrics: Dict[str, Any]
     redis_connected: bool
     model_version: str = "improved_hybrid_v3_75.4pct_pooled"
-
 
 class MetricsResponse(BaseModel):
     total_requests: int
@@ -185,22 +152,16 @@ class MetricsResponse(BaseModel):
     p99_target_ms: int
     p50_target_ms: int
 
-
-# Middleware for request timing
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
-    """Track request latency"""
     start_time = time.time()
     response = await call_next(request)
     process_time_ms = (time.time() - start_time) * 1000
     response.headers["X-Process-Time-Ms"] = str(round(process_time_ms, 2))
     return response
 
-
-# API Endpoints
 @app.get("/", tags=["Root"])
 async def root():
-    """API root - basic info"""
     return {
         "service": "B2B Product Recommendation API",
         "version": "3.0.0",
@@ -211,10 +172,8 @@ async def root():
         "metrics": "/metrics"
     }
 
-
 @app.get("/health", response_model=HealthResponse, tags=["Monitoring"])
 async def health_check():
-    """Health check endpoint"""
     uptime = time.time() - app.state.start_time if hasattr(app.state, 'start_time') else 0
 
     return HealthResponse(
@@ -231,10 +190,8 @@ async def health_check():
         model_version="improved_hybrid_v3_75.4pct_pooled"
     )
 
-
 @app.get("/metrics", response_model=MetricsResponse, tags=["Monitoring"])
 async def get_metrics():
-    """Detailed metrics endpoint"""
     total_requests = max(metrics['requests'], 1)
 
     return MetricsResponse(
@@ -246,29 +203,14 @@ async def get_metrics():
         p50_target_ms=TARGET_P50_MS
     )
 
-
 def get_cache_key(customer_id: int, top_n: int, as_of_date: Optional[datetime]) -> str:
-    """Generate Redis cache key for ad-hoc requests"""
     date_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else 'latest'
     return f"recs:v1:{customer_id}:{top_n}:{date_str}"
 
-
 def get_worker_cache_key(customer_id: int, as_of_date: str) -> str:
-    """
-    Generate Redis cache key for weekly worker pre-computed recommendations.
-    Must match the format used in weekly_recommendation_worker.py
-
-    Format: recommendations:customer:{customer_id}:{as_of_date}
-    Example: recommendations:customer:410376:2024-07-01
-    """
     return f"recommendations:customer:{customer_id}:{as_of_date}"
 
-
 def get_from_worker_cache(customer_id: int, as_of_date: str) -> Optional[Dict[str, Any]]:
-    """
-    Get pre-computed recommendations from weekly worker cache.
-    Returns full result dict with metadata, not just recommendations list.
-    """
     if not redis_client:
         return None
 
@@ -286,9 +228,7 @@ def get_from_worker_cache(customer_id: int, as_of_date: str) -> Optional[Dict[st
         logger.warning(f"Worker cache read error: {e}")
         return None
 
-
 def get_from_cache(cache_key: str) -> Optional[List[Dict]]:
-    """Get recommendations from Redis cache"""
     if not redis_client:
         return None
 
@@ -306,9 +246,7 @@ def get_from_cache(cache_key: str) -> Optional[List[Dict]]:
         logger.warning(f"Cache read error: {e}")
         return None
 
-
 def set_in_cache(cache_key: str, recommendations: List[Dict], ttl: int = CACHE_TTL):
-    """Store recommendations in Redis cache"""
     if not redis_client:
         return
 
@@ -322,29 +260,13 @@ def set_in_cache(cache_key: str, recommendations: List[Dict], ttl: int = CACHE_T
     except Exception as e:
         logger.warning(f"Cache write error: {e}")
 
-
 @app.post("/recommend", response_model=RecommendationResponse, tags=["Recommendations"])
 async def get_recommendations(request: RecommendationRequest):
-    """
-    Generate product recommendations for a customer (V3.1 with discovery)
-
-    Returns top-N product recommendations with expected 75.4% precision@50
-    - Heavy users (500+ orders): 89.2% precision
-    - Regular users (100-500 orders): 88.2% precision
-    - Light users (<100 orders): 54.1% precision
-
-    NEW in V3.1: Collaborative filtering for new product discovery
-    - Recommends BOTH repurchase products AND new products customer hasn't bought
-    - Finds similar customers using Jaccard similarity
-    - Segment-specific blending (Heavy: 80% repurchase, Light: 60% discovery)
-
-    Performance: <2s latency (acceptable for quality improvement)
-    """
     start_time = time.time()
     metrics['requests'] += 1
 
     try:
-        # Parse as_of_date
+
         as_of_date = None
         if request.as_of_date:
             try:
@@ -355,28 +277,25 @@ async def get_recommendations(request: RecommendationRequest):
                     detail=f"Invalid date format: {request.as_of_date}. Use YYYY-MM-DD"
                 )
 
-        # Check caches (worker cache first, then ad-hoc cache)
         cached = False
         from_worker = False
         recommendations = None
 
-        # Convert datetime to string for cache key
         as_of_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else datetime.now().strftime('%Y-%m-%d')
 
         if request.use_cache:
-            # 1. Try worker cache first (pre-computed weekly recommendations)
+
             worker_result = get_from_worker_cache(request.customer_id, as_of_str)
             if worker_result:
-                # Worker cache stores full result dict, extract recommendations
+
                 recommendations = worker_result.get('recommendations', [])
-                # If top_n requested is different, truncate
+
                 if len(recommendations) > request.top_n:
                     recommendations = recommendations[:request.top_n]
                 cached = True
                 from_worker = True
                 logger.info(f"✅ Served from worker cache: customer {request.customer_id}")
 
-            # 2. If not in worker cache, try ad-hoc cache
             if recommendations is None:
                 cache_key = get_cache_key(request.customer_id, request.top_n, as_of_date)
                 recommendations = get_from_cache(cache_key)
@@ -384,15 +303,13 @@ async def get_recommendations(request: RecommendationRequest):
                     cached = True
                     logger.debug(f"Served from ad-hoc cache: customer {request.customer_id}")
 
-        # Generate recommendations if not cached
         if recommendations is None:
-            # Get connection from pool (thread-safe, no lock needed)
+
             conn = get_connection()
             try:
-                # Create recommender instance with pooled connection
+
                 recommender = ImprovedHybridRecommenderV32(conn=conn, use_cache=request.use_cache)
 
-                # as_of_str already defined above for cache keys
                 recommendations = recommender.get_recommendations(
                     customer_id=request.customer_id,
                     as_of_date=as_of_str,
@@ -400,21 +317,17 @@ async def get_recommendations(request: RecommendationRequest):
                     include_discovery=request.include_discovery
                 )
             finally:
-                # Return connection to pool
+
                 conn.close()
 
-            # Cache results
             if request.use_cache:
                 set_in_cache(cache_key, recommendations)
 
-        # Calculate latency
         latency_ms = (time.time() - start_time) * 1000
         metrics['total_latency_ms'] += latency_ms
 
-        # Count discovery recommendations
         discovery_count = sum(1 for r in recommendations if r.get('source') in ['discovery', 'hybrid'])
 
-        # Log slow requests
         if latency_ms > TARGET_P99_MS:
             logger.warning(f"Slow request: {latency_ms:.2f}ms (customer: {request.customer_id})")
 
@@ -423,7 +336,7 @@ async def get_recommendations(request: RecommendationRequest):
             recommendations=recommendations,
             count=len(recommendations),
             discovery_count=discovery_count,
-            precision_estimate=0.754,  # From Improved V3 validation (50-customer test)
+            precision_estimate=0.754,
             latency_ms=round(latency_ms, 2),
             cached=cached,
             timestamp=datetime.now().isoformat()
@@ -439,30 +352,12 @@ async def get_recommendations(request: RecommendationRequest):
             detail=f"Internal server error: {str(e)}"
         )
 
-
 @app.get("/weekly-recommendations/{customer_id}", tags=["Recommendations"])
 async def get_weekly_recommendations(customer_id: int):
-    """
-    Get pre-computed weekly recommendations for a customer (fast retrieval from Redis).
-
-    This endpoint returns 25 product recommendations that were pre-computed by the
-    weekly recommendation worker job. Recommendations are unique per week and include
-    a mix of repurchase products (old) and discovery products (new).
-
-    Performance: <10ms latency (cached in Redis)
-    Fallback: If cache miss, generates on-demand (slower, ~2s)
-
-    Returns:
-        - customer_id: Customer ID
-        - week: Week identifier (e.g., "2025_W45")
-        - recommendations: List of 25 product recommendations
-        - cached: Whether from cache (True) or generated on-demand (False)
-        - latency_ms: Response time
-    """
     start_time = time.time()
 
     try:
-        # Try to get from weekly cache first
+
         recommendations = None
         week_key = None
         cached = False
@@ -477,7 +372,6 @@ async def get_weekly_recommendations(customer_id: int):
             else:
                 logger.debug(f"Weekly cache MISS for customer {customer_id} (week {week_key})")
 
-        # Fallback: Generate on-demand if not in cache
         if recommendations is None:
             logger.info(f"Generating on-demand recommendations for customer {customer_id}")
 
@@ -494,10 +388,8 @@ async def get_weekly_recommendations(customer_id: int):
             finally:
                 conn.close()
 
-        # Calculate latency
         latency_ms = (time.time() - start_time) * 1000
 
-        # Count discovery recommendations
         discovery_count = sum(1 for r in recommendations if r.get('source') in ['discovery', 'hybrid'])
 
         return {
@@ -517,7 +409,6 @@ async def get_weekly_recommendations(customer_id: int):
             status_code=500,
             detail=f"Internal server error: {str(e)}"
         )
-
 
 @app.get(
     "/forecast/{product_id}",
@@ -542,34 +433,16 @@ async def get_product_forecast(
         description="Use Redis cache for performance"
     )
 ):
-    """
-    Generate 3-month product sales forecast
-
-    Returns weekly forecasts with:
-    - Predicted quantities, revenue, order counts
-    - Confidence intervals (95%)
-    - Expected customers per week
-    - At-risk customer identification
-    - Top customer contributions
-
-    Uses customer-based forecasting with Bayesian statistics,
-    Mann-Kendall trend detection, and FFT seasonality analysis.
-
-    **Performance**: ~1-2s for products with 20-40 customers (uses Redis caching)
-
-    **Example**: `/forecast/25367399?forecast_weeks=12&as_of_date=2024-07-01`
-    """
     start_time = time.time()
 
     try:
-        # Get connection from pool
+
         conn = get_connection()
 
         try:
-            # Initialize forecast engine
+
             engine = ForecastEngine(conn=conn, forecast_weeks=forecast_weeks)
 
-            # Generate forecast (with optional caching)
             if use_cache and redis_client:
                 forecast = engine.generate_forecast_cached(
                     product_id=product_id,
@@ -589,14 +462,11 @@ async def get_product_forecast(
                     detail=f"No predictable customers found for product {product_id}"
                 )
 
-            # Calculate latency
             latency_ms = (time.time() - start_time) * 1000
 
-            # Update metrics
             metrics['requests'] += 1
             metrics['total_latency_ms'] += latency_ms
 
-            # Convert to dict for response
             response_dict = {
                 'product_id': forecast.product_id,
                 'product_name': None,  # Will be enriched by engine
@@ -618,7 +488,7 @@ async def get_product_forecast(
             return response_dict
 
         finally:
-            # Return connection to pool
+
             conn.close()
 
     except HTTPException:
@@ -632,15 +502,13 @@ async def get_product_forecast(
             detail=f"Internal error generating forecast: {str(e)}"
         )
 
-
 @app.delete("/cache/{customer_id}", tags=["Cache Management"])
 async def clear_customer_cache(customer_id: int):
-    """Clear all cached recommendations for a customer"""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
 
     try:
-        # Find all keys for this customer
+
         pattern = f"recs:v1:{customer_id}:*"
         keys = list(redis_client.scan_iter(match=pattern))
 
@@ -654,10 +522,8 @@ async def clear_customer_cache(customer_id: int):
         logger.error(f"Error clearing cache: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/cache/clear-all", tags=["Cache Management"])
 async def clear_all_cache():
-    """Clear all cached recommendations (use with caution)"""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
 
@@ -675,18 +541,13 @@ async def clear_all_cache():
         logger.error(f"Error clearing cache: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# Initialize start time
 @app.on_event("startup")
 async def startup_event():
-    """Record start time for uptime calculation"""
     app.state.start_time = time.time()
-
 
 if __name__ == "__main__":
     import uvicorn
 
-    # Development server
     uvicorn.run(
         "main:app",
         host="0.0.0.0",

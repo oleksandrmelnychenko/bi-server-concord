@@ -1,7 +1,3 @@
-"""
-Recommendation API Routes
-"""
-
 from fastapi import APIRouter, HTTPException, Path, Body
 from datetime import datetime
 import logging
@@ -18,17 +14,14 @@ from ml.models.lightfm_recommender import LightFMRecommender
 
 logger = logging.getLogger(__name__)
 
-# Initialize router
 router = APIRouter(prefix="/api/v1/recommendations", tags=["recommendations"])
 
-# Initialize recommender (singleton)
 MODEL_PATH = "/opt/dagster/app/models/lightfm/recommendation_v1.pkl"
 DUCKDB_PATH = "/opt/dagster/app/data/dbt/concord_bi.duckdb"
 
 recommender = None
 
 def get_recommender() -> LightFMRecommender:
-    """Get or create recommender instance"""
     global recommender
     if recommender is None:
         logger.info("Initializing LightFM recommender...")
@@ -75,35 +68,15 @@ async def get_recommendations(
         description="Recommendation request parameters"
     )
 ) -> RecommendationResponse:
-    """
-    Get product recommendations for a customer
-
-    Args:
-        customer_id: Customer ID
-        request: Recommendation parameters (num_recommendations, filters)
-
-    Returns:
-        RecommendationResponse with recommended products
-
-    Raises:
-        HTTPException: If customer not found or error occurs
-    """
     try:
-        # Get recommender
+
         rec = get_recommender()
 
-        # Get customer info (to verify exists)
         customer_info = rec.get_customer_info(customer_id)
 
         if customer_info is None:
             logger.warning(f"Customer {customer_id} not found")
-            # Still try to recommend popular products
-            # raise HTTPException(
-            #     status_code=404,
-            #     detail=f"Customer {customer_id} not found in database"
-            # )
 
-        # Get recommendations
         logger.info(
             f"Generating {request.num_recommendations} recommendations "
             f"for customer {customer_id} "
@@ -120,7 +93,6 @@ async def get_recommendations(
 
         logger.info(f"Generated {len(recommendations)} recommendations for {customer_id}")
 
-        # Build response
         response = RecommendationResponse(
             customer_id=customer_id,
             recommendations=[
@@ -150,7 +122,6 @@ async def get_recommendations(
     description="Check if the recommendation service is running and model is loaded"
 )
 async def health_check():
-    """Health check endpoint"""
     try:
         rec = get_recommender()
         return {
