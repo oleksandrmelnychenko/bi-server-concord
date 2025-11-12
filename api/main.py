@@ -18,7 +18,7 @@ import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from scripts.improved_hybrid_recommender_v32 import ImprovedHybridRecommenderV32
+from scripts.improved_hybrid_recommender_v33 import ImprovedHybridRecommenderV33
 from scripts.redis_helper import WeeklyRecommendationCache
 from scripts.forecasting import ForecastEngine
 from api.db_pool import get_connection, close_pool
@@ -260,99 +260,7 @@ def set_in_cache(cache_key: str, recommendations: List[Dict], ttl: int = CACHE_T
     except Exception as e:
         logger.warning(f"Cache write error: {e}")
 
-@app.post("/recommend", response_model=RecommendationResponse, tags=["Recommendations"])
-async def get_recommendations(request: RecommendationRequest):
-    start_time = time.time()
-    metrics['requests'] += 1
-
-    try:
-
-        as_of_date = None
-        if request.as_of_date:
-            try:
-                as_of_date = datetime.fromisoformat(request.as_of_date)
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid date format: {request.as_of_date}. Use YYYY-MM-DD"
-                )
-
-        cached = False
-        from_worker = False
-        recommendations = None
-
-        as_of_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else datetime.now().strftime('%Y-%m-%d')
-
-        if request.use_cache:
-
-            worker_result = get_from_worker_cache(request.customer_id, as_of_str)
-            if worker_result:
-
-                recommendations = worker_result.get('recommendations', [])
-
-                if len(recommendations) > request.top_n:
-                    recommendations = recommendations[:request.top_n]
-                cached = True
-                from_worker = True
-                logger.info(f"✅ Served from worker cache: customer {request.customer_id}")
-
-            if recommendations is None:
-                cache_key = get_cache_key(request.customer_id, request.top_n, as_of_date)
-                recommendations = get_from_cache(cache_key)
-                if recommendations:
-                    cached = True
-                    logger.debug(f"Served from ad-hoc cache: customer {request.customer_id}")
-
-        if recommendations is None:
-
-            conn = get_connection()
-            try:
-
-                recommender = ImprovedHybridRecommenderV32(conn=conn, use_cache=request.use_cache)
-
-                recommendations = recommender.get_recommendations(
-                    customer_id=request.customer_id,
-                    as_of_date=as_of_str,
-                    top_n=request.top_n,
-                    include_discovery=request.include_discovery
-                )
-            finally:
-
-                conn.close()
-
-            if request.use_cache:
-                set_in_cache(cache_key, recommendations)
-
-        latency_ms = (time.time() - start_time) * 1000
-        metrics['total_latency_ms'] += latency_ms
-
-        discovery_count = sum(1 for r in recommendations if r.get('source') in ['discovery', 'hybrid'])
-
-        if latency_ms > TARGET_P99_MS:
-            logger.warning(f"Slow request: {latency_ms:.2f}ms (customer: {request.customer_id})")
-
-        return RecommendationResponse(
-            customer_id=request.customer_id,
-            recommendations=recommendations,
-            count=len(recommendations),
-            discovery_count=discovery_count,
-            precision_estimate=0.754,
-            latency_ms=round(latency_ms, 2),
-            cached=cached,
-            timestamp=datetime.now().isoformat()
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        metrics['errors'] += 1
-        logger.error(f"Error generating recommendations: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
-
-@app.get("/weekly-recommendations/{customer_id}", tags=["Recommendations"])
+@app.get("/recommendations/{customer_id}", tags=["Recommendations"])
 async def get_weekly_recommendations(customer_id: int):
     start_time = time.time()
 
@@ -377,16 +285,19 @@ async def get_weekly_recommendations(customer_id: int):
 
             conn = get_connection()
             try:
-                recommender = ImprovedHybridRecommenderV32(conn=conn, use_cache=True)
+                recommender = ImprovedHybridRecommenderV33(conn=conn, use_cache=True)
                 as_of_date = datetime.now().strftime('%Y-%m-%d')
                 recommendations = recommender.get_recommendations(
                     customer_id=customer_id,
                     as_of_date=as_of_date,
-                    top_n=25,
+                    top_n=20,
                     include_discovery=True
                 )
             finally:
                 conn.close()
+
+        if len(recommendations) > 20:
+            recommendations = recommendations[:20]
 
         latency_ms = (time.time() - start_time) * 1000
 

@@ -11,7 +11,7 @@ from typing import List, Dict, Any, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from scripts.improved_hybrid_recommender_v31 import ImprovedHybridRecommenderV31
+from scripts.improved_hybrid_recommender_v33 import ImprovedHybridRecommenderV33
 from scripts.redis_helper import WeeklyRecommendationCache
 from api.db_pool import get_connection
 
@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-RECOMMENDATIONS_PER_CLIENT = 25
+RECOMMENDATIONS_PER_CLIENT = 20
 ACTIVE_DAYS_THRESHOLD = 90
 DEFAULT_WORKERS = 4
 
@@ -80,7 +80,7 @@ class WeeklyRecommendationWorker:
         conn = get_connection()
         try:
 
-            recommender = ImprovedHybridRecommenderV31(conn=conn, use_cache=True)
+            recommender = ImprovedHybridRecommenderV33(conn=conn, use_cache=True)
 
             as_of_date = datetime.now().strftime('%Y-%m-%d')
             recommendations = recommender.get_recommendations(
