@@ -684,56 +684,85 @@ class ImprovedHybridRecommenderV33:
             as_of_date=as_of_date
         )
 
-        # V3.3 NEW WEIGHTS: Reduced frequency/recency, added co-purchase & cycle
+        # V3.3 FIXED: Get collaborative filtering scores (discovery from similar customers)
+        if include_discovery:
+            collaborative_scores = self.get_collaborative_score(
+                customer_id=customer_id,
+                as_of_date=as_of_date
+            )
+        else:
+            collaborative_scores = {}
+
+        # V3.3 FIXED WEIGHTS: Added collaborative filtering as 5th feature
         # Old V3.2: freq=50-70%, recency=25-35%
-        # New V3.3: freq=35%, recency=20%, co-purchase=30%, cycle=15%
+        # Old V3.3 (broken): freq=35%, recency=20%, co-purchase=30%, cycle=15%
+        # New V3.3 (fixed): freq=30%, recency=20%, co-purchase=25%, cycle=15%, collaborative=10%
         if segment == "HEAVY":
             v3_weights = {
-                'frequency': 0.35,
+                'frequency': 0.30,     # reduced from 0.35
                 'recency': 0.20,
-                'co_purchase': 0.30,
-                'cycle': 0.15
+                'co_purchase': 0.25,   # reduced from 0.30
+                'cycle': 0.15,
+                'collaborative': 0.10  # NEW - discovery from similar customers
             }
         elif segment == "REGULAR":
             v3_weights = {
-                'frequency': 0.35,
+                'frequency': 0.30,     # reduced from 0.35
                 'recency': 0.20,
-                'co_purchase': 0.30,
-                'cycle': 0.15
+                'co_purchase': 0.25,   # reduced from 0.30
+                'cycle': 0.15,
+                'collaborative': 0.10  # NEW - discovery from similar customers
             }
         else:  # LIGHT
             v3_weights = {
-                'frequency': 0.40,  # Slightly higher for infrequent buyers
-                'recency': 0.25,
-                'co_purchase': 0.25,
-                'cycle': 0.10  # Less reliable with few orders
+                'frequency': 0.35,     # reduced from 0.40
+                'recency': 0.20,       # reduced from 0.25
+                'co_purchase': 0.25,   # unchanged
+                'cycle': 0.10,         # unchanged
+                'collaborative': 0.10  # NEW - more important for customers with less history
             }
 
+        # V3.3 FIXED: Combine repurchase products + discovery products from collaborative filtering
+        all_candidate_products = all_repurchase_products | set(collaborative_scores.keys())
+
         repurchase_scores = {}
-        for product_id in all_repurchase_products:
+        for product_id in all_candidate_products:  # expanded from just all_repurchase_products
             freq_score = frequency_scores.get(product_id, 0)
             rec_score = recency_scores.get(product_id, 0)
             co_purch_score = co_purchase_scores.get(product_id, 0)
             cyc_score = cycle_scores.get(product_id, 0)
+            collab_score = collaborative_scores.get(product_id, 0)  # NEW
 
-            # V3.3 FORMULA: Weighted sum of 4 signals
+            # V3.3 FIXED FORMULA: Weighted sum of 5 signals (was 4)
             repurchase_scores[product_id] = (
                 v3_weights['frequency'] * freq_score +
                 v3_weights['recency'] * rec_score +
                 v3_weights['co_purchase'] * co_purch_score +
-                v3_weights['cycle'] * cyc_score
+                v3_weights['cycle'] * cyc_score +
+                v3_weights['collaborative'] * collab_score  # NEW
             )
 
         sorted_repurchase = sorted(repurchase_scores.items(), key=lambda x: x[1], reverse=True)
         recommendations = []
 
         for idx, (product_id, score) in enumerate(sorted_repurchase[:top_n]):
+            # V3.3 FIXED: Correctly determine source based on repurchase vs discovery
+            was_purchased = product_id in all_repurchase_products
+            has_collaborative = product_id in collaborative_scores and collaborative_scores[product_id] > 0
+
+            if was_purchased and has_collaborative:
+                source = 'hybrid'  # Previously purchased AND recommended by similar customers
+            elif was_purchased:
+                source = 'repurchase'  # Only from customer's own history
+            else:
+                source = 'discovery'  # Only from similar customers (never purchased before)
+
             recommendations.append({
                 'product_id': product_id,
                 'score': float(score),
                 'rank': idx + 1,
                 'segment': f"{segment}_{subsegment}" if subsegment else segment,
-                'source': 'repurchase',
+                'source': source,  # Now correctly set!
                 'agreement_id': agreement_id
             })
 
@@ -742,8 +771,22 @@ class ImprovedHybridRecommenderV33:
         return recommendations
 
     def get_recommendations(self, customer_id: int, as_of_date: str, top_n: int = 20,
-                           repurchase_count: int = 20, discovery_count: int = 5,
                            include_discovery: bool = True) -> List[Dict]:
+        """
+        Generate recommendations for a customer across all their agreements.
+
+        Args:
+            customer_id: Customer ID
+            as_of_date: Cutoff date for training data (YYYY-MM-DD)
+            top_n: Number of recommendations to return
+            include_discovery: Whether to include collaborative filtering (discovery products)
+
+        Returns:
+            List of recommendation dicts with product_id, score, rank, source, etc.
+
+        Note: Removed unused parameters repurchase_count and discovery_count in V3.3 fix.
+              The algorithm naturally blends repurchase + discovery via weighted scoring.
+        """
 
         agreement_ids = self.get_customer_agreements(customer_id)
 
