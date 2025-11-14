@@ -191,7 +191,7 @@ class ForecastEngine:
         """
 
         cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(query, customer_ids)
+        cursor.execute(query, tuple(customer_ids))
 
         customer_names = {
             row['customer_id']: row['customer_name']
