@@ -2,11 +2,13 @@
 
 import logging
 import sys
+import os
 from typing import List, Optional, Dict
 from datetime import datetime
 import json
 
-sys.path.insert(0, '/Users/oleksandrmelnychenko/Projects/Concord-BI-Server/scripts')
+# Add parent scripts directory to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 from datetime_utils import parse_as_of_date, format_date_iso
 
 from .pattern_analyzer import PatternAnalyzer, CustomerProductPattern
@@ -20,12 +22,19 @@ class ForecastEngine:
     def __init__(self, conn, forecast_weeks: int = 12):
         self.conn = conn
         self.forecast_weeks = forecast_weeks
+        self.placeholder = self._detect_placeholder(conn)
 
-        self.pattern_analyzer = PatternAnalyzer(conn)
+        self.pattern_analyzer = PatternAnalyzer(conn, placeholder=self.placeholder)
         self.predictor = CustomerPredictor(forecast_horizon_days=forecast_weeks * 7)
-        self.aggregator = ProductAggregator(forecast_weeks=forecast_weeks)
+        self.aggregator = ProductAggregator(forecast_weeks=forecast_weeks, placeholder=self.placeholder)
 
-        logger.info(f"ForecastEngine initialized for {forecast_weeks} weeks")
+        logger.info(f"ForecastEngine initialized for {forecast_weeks} weeks (placeholder: {self.placeholder})")
+
+    def _detect_placeholder(self, conn) -> str:
+        module = getattr(conn, "__module__", "") or getattr(conn.__class__, "__module__", "")
+        if "pyodbc" in module.lower():
+            return "?"
+        return "%s"
 
     def generate_forecast(
         self,
@@ -130,13 +139,14 @@ class ForecastEngine:
         product_id: int,
         as_of_date: str
     ) -> List[int]:
-        query = """
+        ph = self.placeholder
+        query = f"""
         SELECT DISTINCT ca.ClientID
         FROM dbo.ClientAgreement ca
         INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
         INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-        WHERE oi.ProductID = %s
-              AND o.Created < %s
+        WHERE oi.ProductID = {ph}
+              AND o.Created < {ph}
         ORDER BY ca.ClientID
         """
 
@@ -149,27 +159,34 @@ class ForecastEngine:
         return customers
 
     def _get_product_info(self, product_id: int) -> Dict:
-        query = """
+        ph = self.placeholder
+        query = f"""
         SELECT TOP 1
             p.Name as product_name,
             oi.PricePerItem as unit_price
         FROM dbo.Product p
         LEFT JOIN dbo.OrderItem oi ON p.ID = oi.ProductID
-        WHERE p.ID = %s
+        WHERE p.ID = {ph}
               AND oi.PricePerItem IS NOT NULL
         ORDER BY oi.Created DESC
         """
 
-        cursor = self.conn.cursor(as_dict=True)
+        cursor = self.conn.cursor()
         cursor.execute(query, (product_id,))
 
         row = cursor.fetchone()
         cursor.close()
 
         if row:
+            if isinstance(row, dict):
+                name = row.get('product_name')
+                price = row.get('unit_price')
+            else:
+                name = row[0]
+                price = row[1] if len(row) > 1 else None
             return {
-                'product_name': row['product_name'],
-                'unit_price': float(row['unit_price']) if row['unit_price'] else 35.0
+                'product_name': name,
+                'unit_price': float(price) if price else 35.0
             }
         else:
             return {
@@ -181,7 +198,8 @@ class ForecastEngine:
         if not customer_ids:
             return {}
 
-        placeholders = ','.join(['%s'] * len(customer_ids))
+        ph = self.placeholder
+        placeholders = ','.join([ph] * len(customer_ids))
         query = f"""
         SELECT
             ID as customer_id,
@@ -190,13 +208,18 @@ class ForecastEngine:
         WHERE ID IN ({placeholders})
         """
 
-        cursor = self.conn.cursor(as_dict=True)
+        cursor = self.conn.cursor()
         cursor.execute(query, tuple(customer_ids))
 
-        customer_names = {
-            row['customer_id']: row['customer_name']
-            for row in cursor.fetchall()
-        }
+        customer_names = {}
+        for row in cursor.fetchall():
+            if isinstance(row, dict):
+                cid = row['customer_id']
+                name = row['customer_name']
+            else:
+                cid = row[0]
+                name = row[1]
+            customer_names[cid] = name
         cursor.close()
 
         return customer_names
@@ -294,8 +317,9 @@ class ForecastEngine:
         return {
             'product_id': forecast.product_id,
             'forecast_period_weeks': forecast.forecast_period_weeks,
+            'historical_weeks': forecast.historical_weeks,
             'summary': forecast.summary,
-            'weekly_forecasts': forecast.weekly_forecasts,
+            'weekly_data': forecast.weekly_data,
             'top_customers_by_volume': forecast.top_customers_by_volume,
             'at_risk_customers': forecast.at_risk_customers,
             'model_metadata': forecast.model_metadata
@@ -305,8 +329,9 @@ class ForecastEngine:
         return ProductForecast(
             product_id=data['product_id'],
             forecast_period_weeks=data['forecast_period_weeks'],
+            historical_weeks=data.get('historical_weeks', 0),
             summary=data['summary'],
-            weekly_forecasts=data['weekly_forecasts'],
+            weekly_data=data.get('weekly_data', data.get('weekly_forecasts', [])),
             top_customers_by_volume=data['top_customers_by_volume'],
             at_risk_customers=data['at_risk_customers'],
             model_metadata=data['model_metadata']

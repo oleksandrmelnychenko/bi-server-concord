@@ -2,7 +2,7 @@
 
 import os
 import json
-import pymssql
+import pyodbc
 import logging
 import redis
 from datetime import datetime, timedelta
@@ -15,7 +15,6 @@ DB_CONFIG = {
     'database': os.environ.get('MSSQL_DATABASE', 'ConcordDb_v5'),
     'user': os.environ.get('MSSQL_USER', 'ef_migrator'),
     'password': os.environ.get('MSSQL_PASSWORD', 'Grimm_jow92'),
-    'as_dict': True
 }
 
 REDIS_HOST = os.environ.get('REDIS_HOST', '127.0.0.1')
@@ -24,6 +23,14 @@ SIMILAR_CUSTOMERS_CACHE_TTL = 86400
 
 MAX_SIMILAR_CUSTOMERS = 100
 MIN_SIMILARITY_THRESHOLD = 0.05
+COLD_START_LOOKBACK_DAYS = 90
+MIN_CO_PURCHASE_ORDERS = 3
+MIN_CYCLE_PURCHASES = 3
+COLLAB_SPARSE_CUSTOMERS = 5
+COLLAB_SPARSE_PRODUCTS = 10
+MAX_CANDIDATES = 1000
+ANN_NEIGHBORS_PATH = os.getenv('ANN_NEIGHBORS_PATH')  # JSON file containing {product_id: [{\"product_id\": int, \"score\": float}, ...]}
+ANN_NEIGHBORS_TOPK = int(os.getenv('ANN_NEIGHBORS_TOPK', '200'))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,26 +74,150 @@ class ImprovedHybridRecommenderV33:
                 logger.warning(f"Redis not available: {e}. Running without cache.")
                 self.redis_client = None
 
+        self.ann_index = self._load_ann_neighbors()
+
     def _connect(self):
         try:
-            self.conn = pymssql.connect(**DB_CONFIG)
+            conn_str = (
+                f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+                f"SERVER={DB_CONFIG['server']},{DB_CONFIG['port']};"
+                f"DATABASE={DB_CONFIG['database']};"
+                f"UID={DB_CONFIG['user']};"
+                f"PWD={DB_CONFIG['password']};"
+                f"TrustServerCertificate=yes;"
+            )
+            self.conn = pyodbc.connect(conn_str)
             logger.info("✓ Connected to database")
         except Exception as e:
             logger.error(f"✗ Database connection failed: {e}")
             raise
 
+    class DictCursorWrapper:
+        def __init__(self, cursor):
+            self._cursor = cursor
+            self._columns = None
+
+        def _ensure_columns(self):
+            if self._columns is None and self._cursor.description:
+                self._columns = [col[0] for col in self._cursor.description]
+
+        def execute(self, *args, **kwargs):
+            return self._cursor.execute(*args, **kwargs)
+
+        def fetchone(self):
+            row = self._cursor.fetchone()
+            if row is None:
+                return None
+            if isinstance(row, dict):
+                return row
+            self._ensure_columns()
+            return {col: row[idx] for idx, col in enumerate(self._columns)}
+
+        def fetchall(self):
+            rows = self._cursor.fetchall()
+            if not rows:
+                return []
+            if isinstance(rows[0], dict):
+                return rows
+            self._ensure_columns()
+            return [
+                {col: row[idx] for idx, col in enumerate(self._columns)}
+                for row in rows
+            ]
+
+        def __iter__(self):
+            for row in self.fetchall():
+                yield row
+
+        def close(self):
+            return self._cursor.close()
+
+    def _dict_cursor(self):
+        """Create a cursor that yields dictionaries even for pyodbc"""
+        try:
+            cursor = self.conn.cursor(as_dict=True)
+            return cursor
+        except Exception:
+            return self.DictCursorWrapper(self.conn.cursor())
+
+    def _load_ann_neighbors(self) -> Optional[Dict[int, List[Tuple[int, float]]]]:
+        """
+        Load precomputed ANN neighbors from JSON file.
+        Expected format: {product_id: [{"product_id": int, "score": float}, ...]}
+        """
+        if not ANN_NEIGHBORS_PATH:
+            logger.warning("ANN_NEIGHBORS_PATH not set; collaborative ANN disabled")
+            return None
+        if not os.path.exists(ANN_NEIGHBORS_PATH):
+            logger.error(f"ANN neighbors file not found: {ANN_NEIGHBORS_PATH}")
+            return None
+        try:
+            with open(ANN_NEIGHBORS_PATH, "r") as f:
+                data = json.load(f)
+            index = {}
+            for pid, neighbors in data.items():
+                try:
+                    pid_int = int(pid)
+                except Exception:
+                    continue
+                index[pid_int] = [
+                    (int(n["product_id"]), float(n.get("score", 0.0)))
+                    for n in neighbors[:ANN_NEIGHBORS_TOPK]
+                ]
+            logger.info(f"Loaded ANN neighbors for {len(index)} products from {ANN_NEIGHBORS_PATH}")
+            return index
+        except Exception as e:
+            logger.error(f"Failed to load ANN neighbors: {e}")
+            return None
+
+    @staticmethod
+    def _normalize_date(as_of_date: str) -> str:
+        """
+        Ensure we only ever send ISO dates to SQL to avoid injection and mixed formats.
+        """
+        if isinstance(as_of_date, datetime):
+            return as_of_date.strftime('%Y-%m-%d')
+        try:
+            return datetime.strptime(as_of_date, '%Y-%m-%d').strftime('%Y-%m-%d')
+        except Exception as e:
+            raise ValueError(f"Invalid as_of_date format (expected YYYY-MM-DD): {as_of_date}") from e
+
+    def _get_sellable_product_ids(self, product_ids: List[int]) -> Set[int]:
+        """
+        Filter product IDs to only include sellable products (IsForSale=1, Deleted=0).
+        """
+        if not product_ids:
+            return set()
+
+        placeholders = ','.join(['?'] * len(product_ids))
+        query = f"""
+        SELECT ID FROM dbo.Product
+        WHERE ID IN ({placeholders})
+          AND IsForSale = 1
+          AND Deleted = 0
+        """
+
+        cursor = self._dict_cursor()
+        cursor.execute(query, product_ids)
+
+        sellable = {row['ID'] for row in cursor}
+        cursor.close()
+        return sellable
+
     def classify_customer(self, customer_id: int, as_of_date: str) -> Tuple[str, str]:
 
-        query = f"""
+        as_of_date = self._normalize_date(as_of_date)
+
+        query = """
         SELECT COUNT(DISTINCT o.ID) as orders_before
         FROM dbo.ClientAgreement ca
         INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
-        WHERE ca.ClientID = {customer_id}
-              AND o.Created < '{as_of_date}'
+        WHERE ca.ClientID = ?
+              AND o.Created < ?
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(query)
+        cursor = self._dict_cursor()
+        cursor.execute(query, (customer_id, as_of_date))
         row = cursor.fetchone()
         orders_before = row['orders_before'] if row else 0
 
@@ -96,7 +227,7 @@ class ImprovedHybridRecommenderV33:
         elif orders_before >= 100:
             segment = "REGULAR"
 
-            repurchase_query = f"""
+            repurchase_query = """
             SELECT
                 COUNT(DISTINCT oi.ProductID) as total_products,
                 COUNT(DISTINCT CASE WHEN purchase_count >= 2 THEN oi.ProductID END) as repurchased_products
@@ -105,16 +236,16 @@ class ImprovedHybridRecommenderV33:
                 FROM dbo.ClientAgreement ca
                 INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
                 INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-                WHERE ca.ClientID = {customer_id}
-                      AND o.Created < '{as_of_date}'
+                WHERE ca.ClientID = ?
+                      AND o.Created < ?
                       AND oi.ProductID IS NOT NULL
                 GROUP BY oi.ProductID
             ) AS counts
             LEFT JOIN dbo.OrderItem oi ON oi.ProductID = counts.ProductID
             """
 
-            cursor = self.conn.cursor(as_dict=True)
-            cursor.execute(repurchase_query)
+            cursor = self._dict_cursor()
+            cursor.execute(repurchase_query, (customer_id, as_of_date))
             repurchase_row = cursor.fetchone()
 
             if repurchase_row and repurchase_row['total_products'] > 0:
@@ -131,6 +262,8 @@ class ImprovedHybridRecommenderV33:
 
     def get_customer_products(self, customer_id: int, as_of_date: str, limit: int = 500) -> Set[int]:
 
+        as_of_date = self._normalize_date(as_of_date)
+
         query = f"""
         SELECT DISTINCT ProductID
         FROM (
@@ -138,15 +271,15 @@ class ImprovedHybridRecommenderV33:
             FROM dbo.ClientAgreement ca
             INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
             INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-            WHERE ca.ClientID = {customer_id}
-                  AND o.Created < '{as_of_date}'
+            WHERE ca.ClientID = ?
+                  AND o.Created < ?
                   AND oi.ProductID IS NOT NULL
             ORDER BY o.Created DESC
         ) AS RecentProducts
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(query)
+        cursor = self._dict_cursor()
+        cursor.execute(query, (customer_id, as_of_date))
 
         products = {row['ProductID'] for row in cursor}
         cursor.close()
@@ -155,6 +288,8 @@ class ImprovedHybridRecommenderV33:
         return products
 
     def find_similar_customers(self, customer_id: int, as_of_date: str, limit: int = MAX_SIMILAR_CUSTOMERS) -> List[Tuple[int, float]]:
+
+        as_of_date = self._normalize_date(as_of_date)
 
         if self.redis_client:
             cache_key = f"similar_customers:{customer_id}:{as_of_date}"
@@ -172,20 +307,24 @@ class ImprovedHybridRecommenderV33:
             logger.warning(f"Customer {customer_id} has no purchase history")
             return []
 
-        product_list = ','.join(str(p) for p in target_products)
+        # Parameterize the IN clause to avoid string injection
+        product_placeholders = ','.join(['?'] * len(target_products))
 
         query = f"""
         SELECT DISTINCT ca.ClientID
         FROM dbo.ClientAgreement ca
         INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
         INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-        WHERE ca.ClientID != {customer_id}
-              AND oi.ProductID IN ({product_list})
-              AND o.Created < '{as_of_date}'
+        WHERE ca.ClientID != ?
+              AND oi.ProductID IN ({product_placeholders})
+              AND o.Created < ?
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(query)
+        cursor = self._dict_cursor()
+        params = [customer_id]
+        params.extend(list(target_products))
+        params.append(as_of_date)
+        cursor.execute(query, tuple(params))
 
         candidate_customers = [row['ClientID'] for row in cursor]
         cursor.close()
@@ -224,76 +363,53 @@ class ImprovedHybridRecommenderV33:
 
         return similar_customers
 
-    def get_collaborative_score(self, customer_id: int, as_of_date: str) -> Dict[int, float]:
-
-        similar_customers = self.find_similar_customers(customer_id, as_of_date)
-
-        if not similar_customers:
-            logger.debug(f"No similar customers found for {customer_id}")
-            return {}
-
-        target_products = self.get_customer_products(customer_id, as_of_date, limit=5000)
-        target_product_ids = ','.join(str(pid) for pid in target_products) if target_products else '0'
-
-        similarity_values = ','.join(f"({cid}, {sim})" for cid, sim in similar_customers)
-
-        query = f"""
-        WITH SimilarityScores AS (
-            -- Inline similarity scores as a virtual table
-            SELECT customer_id, similarity
-            FROM (VALUES {similarity_values}) AS t(customer_id, similarity)
-        ),
-        ProductPurchases AS (
-            -- Get all products bought by similar customers with their similarity scores
-            SELECT
-                oi.ProductID,
-                ss.customer_id,
-                ss.similarity
-            FROM dbo.ClientAgreement ca
-            INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
-            INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-            INNER JOIN SimilarityScores ss ON ca.ClientID = ss.customer_id
-            WHERE o.Created < '{as_of_date}'
-                  AND oi.ProductID IS NOT NULL
-                  AND oi.ProductID NOT IN ({target_product_ids})  -- Exclude owned products
-        )
-        SELECT
-            ProductID,
-            SUM(similarity) / COUNT(DISTINCT customer_id) as weighted_score,
-            COUNT(DISTINCT customer_id) as customer_count
-        FROM ProductPurchases
-        GROUP BY ProductID
-        HAVING COUNT(DISTINCT customer_id) >= 2  -- At least 2 similar customers bought it
-        ORDER BY weighted_score DESC
+    def get_collaborative_score(self, customer_id: int, as_of_date: str) -> Tuple[Dict[int, float], int]:
         """
+        ANN-based collaborative score using precomputed item neighbors. No SQL fallback.
+        """
+        if not self.ann_index:
+            logger.warning("ANN index not loaded; collaborative score disabled")
+            return {}, 0
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(query)
+        as_of_date = self._normalize_date(as_of_date)
+        owned_products = self.get_customer_products(customer_id, as_of_date, limit=5000)
+        if not owned_products:
+            return {}, 0
 
-        collaborative_scores = {}
-        for row in cursor:
-            collaborative_scores[row['ProductID']] = float(row['weighted_score'])
+        candidate_scores = defaultdict(float)
+        for pid in owned_products:
+            neighbors = self.ann_index.get(pid, [])
+            for nbr_id, sim in neighbors:
+                if nbr_id in owned_products:
+                    continue
+                candidate_scores[nbr_id] += sim
 
-        cursor.close()
+        if not candidate_scores:
+            return {}, len(owned_products)
 
-        logger.debug(f"Generated {len(collaborative_scores)} collaborative recommendations")
+        sellable_ids = self._get_sellable_product_ids(list(candidate_scores.keys()))
+        collaborative_scores = {
+            pid: float(score) for pid, score in candidate_scores.items() if pid in sellable_ids
+        }
 
-        return collaborative_scores
+        return collaborative_scores, len(owned_products)
 
     def get_frequency_score(self, customer_id: int, as_of_date: str) -> Dict[int, float]:
-        query = f"""
+        as_of_date = self._normalize_date(as_of_date)
+
+        query = """
         SELECT oi.ProductID, COUNT(DISTINCT o.ID) as purchase_count
         FROM dbo.ClientAgreement ca
         INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
         INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-        WHERE ca.ClientID = {customer_id}
-              AND o.Created < '{as_of_date}'
+        WHERE ca.ClientID = ?
+              AND o.Created < ?
               AND oi.ProductID IS NOT NULL
         GROUP BY oi.ProductID
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(query)
+        cursor = self._dict_cursor()
+        cursor.execute(query, (customer_id, as_of_date))
 
         scores = {}
         max_count = 1
@@ -307,19 +423,21 @@ class ImprovedHybridRecommenderV33:
         return scores
 
     def get_recency_score(self, customer_id: int, as_of_date: str) -> Dict[int, float]:
-        query = f"""
+        as_of_date = self._normalize_date(as_of_date)
+
+        query = """
         SELECT oi.ProductID, MAX(o.Created) as last_purchase
         FROM dbo.ClientAgreement ca
         INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
         INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-        WHERE ca.ClientID = {customer_id}
-              AND o.Created < '{as_of_date}'
+        WHERE ca.ClientID = ?
+              AND o.Created < ?
               AND oi.ProductID IS NOT NULL
         GROUP BY oi.ProductID
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(query)
+        cursor = self._dict_cursor()
+        cursor.execute(query, (customer_id, as_of_date))
 
         as_of_datetime = datetime.strptime(as_of_date, '%Y-%m-%d')
         scores = {}
@@ -340,7 +458,7 @@ class ImprovedHybridRecommenderV33:
 
         cursor = self.conn.cursor()
 
-        ids_str = ','.join(map(str, product_ids))
+        ids_str = ','.join(['?'] * len(product_ids))
 
         query = f"""
         SELECT ProductID, ProductGroupID
@@ -349,7 +467,7 @@ class ImprovedHybridRecommenderV33:
               AND Deleted = 0
         """
 
-        cursor.execute(query)
+        cursor.execute(query, tuple(product_ids))
         rows = cursor.fetchall()
 
         groups = {}
@@ -390,16 +508,16 @@ class ImprovedHybridRecommenderV33:
         return filtered
 
     def get_customer_agreements(self, customer_id: int) -> List[int]:
-        query = f"""
+        query = """
         SELECT ID as AgreementID
         FROM dbo.ClientAgreement
-        WHERE ClientID = {customer_id}
+        WHERE ClientID = ?
               AND Deleted = 0
         ORDER BY Created DESC
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(query)
+        cursor = self._dict_cursor()
+        cursor.execute(query, (customer_id,))
 
         agreement_ids = [row['AgreementID'] for row in cursor]
         cursor.close()
@@ -430,7 +548,8 @@ class ImprovedHybridRecommenderV33:
         if not product_ids:
             return {}
 
-        product_id_list = ','.join(str(pid) for pid in product_ids)
+        as_of_date = self._normalize_date(as_of_date)
+        product_id_list = ','.join(['?'] * len(product_ids))
 
         query = f"""
         WITH AgreementProducts AS (
@@ -438,9 +557,9 @@ class ImprovedHybridRecommenderV33:
             SELECT DISTINCT oi.ProductID
             FROM dbo.[Order] o
             INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-            WHERE o.ClientAgreementID = {agreement_id}
-                  AND o.Created < '{as_of_date}'
-                  AND o.Created >= DATEADD(day, -{days_window}, '{as_of_date}')
+            WHERE o.ClientAgreementID = ?
+                  AND o.Created < ?
+                  AND o.Created >= DATEADD(day, -?, ?)
         ),
         CoOccurrence AS (
             -- For candidate products, count co-occurrences with agreement's products
@@ -451,18 +570,18 @@ class ImprovedHybridRecommenderV33:
             INNER JOIN dbo.OrderItem oi_candidate ON o.ID = oi_candidate.OrderID
             INNER JOIN dbo.OrderItem oi_existing ON o.ID = oi_existing.OrderID
             INNER JOIN AgreementProducts ap ON oi_existing.ProductID = ap.ProductID
-            WHERE o.ClientAgreementID = {agreement_id}
-                  AND o.Created < '{as_of_date}'
-                  AND o.Created >= DATEADD(day, -{days_window}, '{as_of_date}')
+            WHERE o.ClientAgreementID = ?
+                  AND o.Created < ?
+                  AND o.Created >= DATEADD(day, -?, ?)
                   AND oi_candidate.ProductID IN ({product_id_list})
                   AND oi_candidate.ProductID != oi_existing.ProductID
             GROUP BY oi_candidate.ProductID
         ),
         TotalOrders AS (
             SELECT COUNT(DISTINCT ID) as total FROM dbo.[Order]
-            WHERE ClientAgreementID = {agreement_id}
-                  AND Created < '{as_of_date}'
-                  AND Created >= DATEADD(day, -{days_window}, '{as_of_date}')
+            WHERE ClientAgreementID = ?
+                  AND Created < ?
+                  AND Created >= DATEADD(day, -?, ?)
         )
         SELECT
             co.CandidateProduct as ProductID,
@@ -474,12 +593,43 @@ class ImprovedHybridRecommenderV33:
         CROSS JOIN TotalOrders t
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(query)
+        cursor = self._dict_cursor()
+        params = [
+            agreement_id, as_of_date, days_window, as_of_date,  # AgreementProducts
+            agreement_id, as_of_date, days_window, as_of_date,  # CoOccurrence
+        ]
+        params.extend(product_ids)  # Candidate IN list
+        params.extend([
+            agreement_id, as_of_date, days_window, as_of_date   # TotalOrders
+        ])
+        cursor.execute(query, tuple(params))
 
         scores = {}
         for row in cursor:
             scores[row['ProductID']] = float(row['co_purchase_rate'])
+
+        # Guard against tiny sample sizes to avoid noisy boosts
+        try:
+            cursor_total = self._dict_cursor()
+            cursor_total.execute(
+                """
+                SELECT COUNT(DISTINCT ID) as total_orders
+                FROM dbo.[Order]
+                WHERE ClientAgreementID = ?
+                  AND Created < ?
+                  AND Created >= DATEADD(day, -?, ?)
+                """,
+                (agreement_id, as_of_date, days_window, as_of_date)
+            )
+            row = cursor_total.fetchone()
+            total_orders = row['total_orders'] if row else 0
+            cursor_total.close()
+            if total_orders < MIN_CO_PURCHASE_ORDERS:
+                logger.debug(f"Co-purchase suppressed: only {total_orders} orders in window")
+                cursor.close()
+                return {}
+        except Exception as e:
+            logger.warning(f"Co-purchase sample check failed: {e}")
 
         cursor.close()
         logger.debug(f"Co-purchase scores: {len(scores)} products analyzed")
@@ -507,7 +657,8 @@ class ImprovedHybridRecommenderV33:
         if not product_ids:
             return {}
 
-        product_id_list = ','.join(str(pid) for pid in product_ids)
+        as_of_date = self._normalize_date(as_of_date)
+        product_id_list = ','.join(['?'] * len(product_ids))
 
         query = f"""
         WITH PurchaseDates AS (
@@ -517,8 +668,8 @@ class ImprovedHybridRecommenderV33:
                 LAG(o.Created) OVER (PARTITION BY oi.ProductID ORDER BY o.Created) as PrevPurchase
             FROM dbo.[Order] o
             INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-            WHERE o.ClientAgreementID = {agreement_id}
-                  AND o.Created < '{as_of_date}'
+            WHERE o.ClientAgreementID = ?
+                  AND o.Created < ?
                   AND oi.ProductID IN ({product_id_list})
         ),
         CycleStats AS (
@@ -527,24 +678,27 @@ class ImprovedHybridRecommenderV33:
                 AVG(DATEDIFF(day, PrevPurchase, Created)) as avg_cycle_days,
                 STDEV(DATEDIFF(day, PrevPurchase, Created)) as cycle_variance,
                 MAX(Created) as last_purchase_date,
-                COUNT(*) as purchase_count
-            FROM PurchaseDates
-            WHERE PrevPurchase IS NOT NULL
-            GROUP BY ProductID
-            HAVING COUNT(*) >= 2  -- Need at least 2 purchases to detect cycle
+            COUNT(*) as purchase_count
+        FROM PurchaseDates
+        WHERE PrevPurchase IS NOT NULL
+        GROUP BY ProductID
+        HAVING COUNT(*) >= {MIN_CYCLE_PURCHASES}  -- Need sufficient purchases to detect cycle
         )
         SELECT
             ProductID,
             avg_cycle_days,
             cycle_variance,
-            DATEDIFF(day, last_purchase_date, '{as_of_date}') as days_since_last,
+            DATEDIFF(day, last_purchase_date, ?) as days_since_last,
             purchase_count
         FROM CycleStats
         WHERE avg_cycle_days IS NOT NULL
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(query)
+        cursor = self._dict_cursor()
+        params = [agreement_id, as_of_date]
+        params.extend(product_ids)
+        params.append(as_of_date)
+        cursor.execute(query, tuple(params))
 
         scores = {}
         as_of_datetime = datetime.strptime(as_of_date, '%Y-%m-%d')
@@ -585,9 +739,10 @@ class ImprovedHybridRecommenderV33:
 
     def get_recommendations_for_agreement(self, agreement_id: int, as_of_date: str, top_n: int = 20,
                                          include_discovery: bool = True) -> List[Dict]:
-        cursor = self.conn.cursor(as_dict=True)
+        as_of_date = self._normalize_date(as_of_date)
+        cursor = self._dict_cursor()
 
-        cursor.execute(f"SELECT ClientID FROM dbo.ClientAgreement WHERE ID = {agreement_id}")
+        cursor.execute("SELECT ClientID FROM dbo.ClientAgreement WHERE ID = ?", (agreement_id,))
         result = cursor.fetchone()
         cursor.close()
 
@@ -597,15 +752,15 @@ class ImprovedHybridRecommenderV33:
 
         customer_id = result['ClientID']
 
-        segment_query = f"""
+        segment_query = """
         SELECT COUNT(DISTINCT o.ID) as orders_before
         FROM dbo.[Order] o
-        WHERE o.ClientAgreementID = {agreement_id}
-              AND o.Created < '{as_of_date}'
+        WHERE o.ClientAgreementID = ?
+              AND o.Created < ?
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(segment_query)
+        cursor = self._dict_cursor()
+        cursor.execute(segment_query, (agreement_id, as_of_date))
         row = cursor.fetchone()
         cursor.close()
         orders_before = row['orders_before'] if row else 0
@@ -622,18 +777,18 @@ class ImprovedHybridRecommenderV33:
 
         logger.debug(f"Agreement {agreement_id}: {segment}" + (f" ({subsegment})" if subsegment else ""))
 
-        frequency_query = f"""
+        frequency_query = """
         SELECT oi.ProductID, COUNT(DISTINCT o.ID) as purchase_count
         FROM dbo.[Order] o
         INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-        WHERE o.ClientAgreementID = {agreement_id}
-              AND o.Created < '{as_of_date}'
+        WHERE o.ClientAgreementID = ?
+              AND o.Created < ?
               AND oi.ProductID IS NOT NULL
         GROUP BY oi.ProductID
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(frequency_query)
+        cursor = self._dict_cursor()
+        cursor.execute(frequency_query, (agreement_id, as_of_date))
 
         frequency_scores = {}
         max_count = 1
@@ -644,18 +799,18 @@ class ImprovedHybridRecommenderV33:
         frequency_scores = {pid: count / max_count for pid, count in frequency_scores.items()}
         cursor.close()
 
-        recency_query = f"""
+        recency_query = """
         SELECT oi.ProductID, MAX(o.Created) as last_purchase
         FROM dbo.[Order] o
         INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-        WHERE o.ClientAgreementID = {agreement_id}
-              AND o.Created < '{as_of_date}'
+        WHERE o.ClientAgreementID = ?
+              AND o.Created < ?
               AND oi.ProductID IS NOT NULL
         GROUP BY oi.ProductID
         """
 
-        cursor = self.conn.cursor(as_dict=True)
-        cursor.execute(recency_query)
+        cursor = self._dict_cursor()
+        cursor.execute(recency_query, (agreement_id, as_of_date))
 
         as_of_datetime = datetime.strptime(as_of_date, '%Y-%m-%d')
         recency_scores = {}
@@ -686,12 +841,12 @@ class ImprovedHybridRecommenderV33:
 
         # V3.3 FIXED: Get collaborative filtering scores (discovery from similar customers)
         if include_discovery:
-            collaborative_scores = self.get_collaborative_score(
+            collaborative_scores, similar_count = self.get_collaborative_score(
                 customer_id=customer_id,
                 as_of_date=as_of_date
             )
         else:
-            collaborative_scores = {}
+            collaborative_scores, similar_count = {}, 0
 
         # V3.3 FIXED WEIGHTS: Added collaborative filtering as 5th feature
         # Old V3.2: freq=50-70%, recency=25-35%
@@ -721,6 +876,17 @@ class ImprovedHybridRecommenderV33:
                 'cycle': 0.10,         # unchanged
                 'collaborative': 0.10  # NEW - more important for customers with less history
             }
+
+        # Adaptive collaborative weight: downweight when sparse signals
+        collab_count = len([s for s in collaborative_scores.values() if s > 0])
+        if similar_count == 0 or collab_count == 0:
+            collab_factor = 0.0
+        elif similar_count < COLLAB_SPARSE_CUSTOMERS or collab_count < COLLAB_SPARSE_PRODUCTS:
+            collab_factor = 0.5
+        else:
+            collab_factor = 1.0
+
+        v3_weights['collaborative'] *= collab_factor
 
         # V3.3 FIXED: Combine repurchase products + discovery products from collaborative filtering
         all_candidate_products = all_repurchase_products | set(collaborative_scores.keys())
@@ -788,11 +954,12 @@ class ImprovedHybridRecommenderV33:
               The algorithm naturally blends repurchase + discovery via weighted scoring.
         """
 
+        as_of_date = self._normalize_date(as_of_date)
         agreement_ids = self.get_customer_agreements(customer_id)
 
         if not agreement_ids:
-            logger.warning(f"Customer {customer_id} has no agreements")
-            return []
+            logger.warning(f"Customer {customer_id} has no agreements; returning popular products")
+            return self.get_popular_products(as_of_date=as_of_date, top_n=top_n)
 
         all_recommendations = []
 
@@ -827,7 +994,50 @@ class ImprovedHybridRecommenderV33:
         logger.info(f"Customer {customer_id}: Generated {len(sorted_recommendations)} recommendations " +
                    f"from {len(agreement_ids)} agreements ({discovery_count} discovery)")
 
-        return sorted_recommendations
+        if sorted_recommendations:
+            return sorted_recommendations
+
+        logger.warning(f"Customer {customer_id}: No personalized recommendations; returning popular products fallback")
+        return self.get_popular_products(as_of_date=as_of_date, top_n=top_n)
+
+    def get_popular_products(self, as_of_date: str, top_n: int = 20) -> List[Dict]:
+        """
+        Cold-start fallback: return top products by order count in recent window.
+        """
+        as_of_date = self._normalize_date(as_of_date)
+        lookback = COLD_START_LOOKBACK_DAYS
+        top_n = max(1, int(top_n))
+
+        query = f"""
+        SELECT TOP {top_n}
+            oi.ProductID,
+            COUNT(DISTINCT o.ID) as orders_count
+        FROM dbo.[Order] o
+        INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
+        WHERE o.Created < ?
+          AND o.Created >= DATEADD(day, -?, ?)
+          AND oi.ProductID IS NOT NULL
+        GROUP BY oi.ProductID
+        ORDER BY orders_count DESC
+        """
+
+        cursor = self._dict_cursor()
+        cursor.execute(query, (as_of_date, lookback, as_of_date))
+        rows = cursor.fetchall()
+        cursor.close()
+
+        fallback = []
+        for idx, row in enumerate(rows):
+            fallback.append({
+                'product_id': row['ProductID'],
+                'score': float(row['orders_count']),
+                'rank': idx + 1,
+                'segment': 'COLD_START',
+                'source': 'popular',
+                'agreement_id': None
+            })
+
+        return fallback
 
     def close(self):
         if self.conn:

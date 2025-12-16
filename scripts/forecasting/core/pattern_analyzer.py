@@ -8,8 +8,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
 import sys
+import os
 
-sys.path.insert(0, '/Users/oleksandrmelnychenko/Projects/Concord-BI-Server/scripts')
+# Add parent scripts directory to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 from datetime_utils import calculate_fractional_days
 
 logger = logging.getLogger(__name__)
@@ -59,9 +61,10 @@ class CustomerProductPattern:
 
 class PatternAnalyzer:
 
-    def __init__(self, conn):
+    def __init__(self, conn, placeholder: str = "%s"):
         self.conn = conn
-        logger.info("PatternAnalyzer initialized")
+        self.placeholder = placeholder
+        logger.info(f"PatternAnalyzer initialized (placeholder: {self.placeholder})")
 
     def analyze_customer_product(
         self,
@@ -162,7 +165,8 @@ class PatternAnalyzer:
         product_id: int,
         as_of_date: str
     ) -> List[Dict]:
-        query = """
+        ph = self.placeholder
+        query = f"""
         SELECT
             o.ID as order_id,
             o.Created as order_date,
@@ -170,21 +174,27 @@ class PatternAnalyzer:
         FROM dbo.ClientAgreement ca
         INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
         INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
-        WHERE ca.ClientID = %s
-              AND oi.ProductID = %s
-              AND o.Created < %s
+        WHERE ca.ClientID = {ph}
+              AND oi.ProductID = {ph}
+              AND o.Created < {ph}
         GROUP BY o.ID, o.Created
         ORDER BY o.Created
         """
 
-        cursor = self.conn.cursor(as_dict=True)
+        cursor = self.conn.cursor()
         cursor.execute(query, (customer_id, product_id, as_of_date))
 
         orders = []
         for row in cursor.fetchall():
+            if isinstance(row, dict):
+                date_val = row['order_date']
+                qty_val = row['total_quantity']
+            else:
+                date_val = row[1]
+                qty_val = row[2]
             orders.append({
-                'date': row['order_date'],
-                'quantity': row['total_quantity']
+                'date': date_val,
+                'quantity': qty_val
             })
 
         cursor.close()

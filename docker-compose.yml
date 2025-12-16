@@ -34,6 +34,9 @@ services:
       - DB_NAME=ConcordDb_v5
       - DB_USER=sa
       - DB_PASSWORD=Passw0rd
+      - ANN_NEIGHBORS_PATH=/app/data/ann_neighbors.json
+    volumes:
+      - ./data:/app/data
     depends_on:
       redis:
         condition: service_healthy
@@ -63,6 +66,7 @@ services:
       - DB_PASSWORD=Passw0rd
       - AS_OF_DATE=${AS_OF_DATE:-}
       - CRON_SCHEDULE=${CRON_SCHEDULE:-0 2 * * 0}  # Default: Sunday 2 AM
+      - ANN_NEIGHBORS_PATH=/app/data/ann_neighbors.json
     depends_on:
       redis:
         condition: service_healthy
@@ -72,6 +76,7 @@ services:
     volumes:
       - ./workers:/app/workers
       - worker_logs:/app/workers/logs
+      - ./data:/app/data
 
   # Forecast Worker - Pre-computes product forecasts
   forecast-worker:

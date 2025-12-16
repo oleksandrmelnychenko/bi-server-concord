@@ -46,11 +46,13 @@ class ProductAggregator:
         self,
         forecast_weeks: int = 12,
         historical_weeks: int = 3,
-        unit_price: Optional[float] = None
+        unit_price: Optional[float] = None,
+        placeholder: str = "%s"
     ):
         self.forecast_weeks = forecast_weeks
         self.historical_weeks = historical_weeks
         self.unit_price = unit_price
+        self.placeholder = placeholder
         logger.info(f"ProductAggregator initialized for {forecast_weeks} weeks + {historical_weeks} historical")
 
     def aggregate_forecast(
@@ -129,16 +131,17 @@ class ProductAggregator:
 
             start_date = as_of_date - timedelta(days=self.historical_weeks * 7)
 
-            query = """
+            ph = self.placeholder
+            query = f"""
             SELECT
                 DATEADD(day, DATEDIFF(day, 0, o.Created) / 7 * 7, 0) as week_start,
                 SUM(oi.Qty) as total_quantity,
                 COUNT(DISTINCT o.ID) as total_orders
             FROM dbo.OrderItem oi WITH (NOLOCK)
             INNER JOIN dbo.[Order] o WITH (NOLOCK) ON oi.OrderID = o.ID
-            WHERE oi.ProductID = %s
-              AND o.Created >= %s
-              AND o.Created < %s
+            WHERE oi.ProductID = {ph}
+              AND o.Created >= {ph}
+              AND o.Created < {ph}
             GROUP BY DATEADD(day, DATEDIFF(day, 0, o.Created) / 7 * 7, 0)
             ORDER BY week_start
             """

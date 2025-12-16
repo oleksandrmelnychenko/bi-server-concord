@@ -11,7 +11,7 @@ import logging
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.improved_hybrid_recommender_v32 import ImprovedHybridRecommenderV32
+from scripts.improved_hybrid_recommender_v33 import ImprovedHybridRecommenderV33
 from api.db_pool import get_connection
 
 logging.basicConfig(
@@ -95,7 +95,7 @@ class WeeklyRecommendationWorker:
         self,
         customer_id: int,
         as_of_date: str,
-        recommender: ImprovedHybridRecommenderV32
+        recommender: ImprovedHybridRecommenderV33
     ) -> Dict[str, Any]:
         try:
             start_time = time.time()
@@ -164,7 +164,7 @@ class WeeklyRecommendationWorker:
             logger.warning("No active customers found. Exiting.")
             return
 
-        recommender = ImprovedHybridRecommenderV32(conn=self.conn, use_cache=False)
+        recommender = ImprovedHybridRecommenderV33(conn=self.conn, use_cache=False)
 
         logger.info("\n" + "=" * 80)
         logger.info("PROCESSING CUSTOMERS")

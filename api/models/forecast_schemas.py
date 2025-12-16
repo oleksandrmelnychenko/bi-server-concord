@@ -99,13 +99,13 @@ class ProductForecastResponse(BaseModel):
                     "active_customers": 34,
                     "at_risk_customers": 5
                 },
-                "weekly_forecasts": [
+                "weekly_data": [
                     {
                         "week_start": "2025-11-11",
                         "week_end": "2025-11-17",
-                        "predicted_quantity": 245.0,
-                        "predicted_revenue": 8575.00,
-                        "predicted_orders": 8.0,
+                        "quantity": 245.0,
+                        "revenue": 8575.00,
+                        "orders": 8.0,
                         "confidence_lower": 180.0,
                         "confidence_upper": 310.0,
                         "expected_customers": [

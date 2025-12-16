@@ -303,6 +303,9 @@ async def get_weekly_recommendations(customer_id: int):
 
         discovery_count = sum(1 for r in recommendations if r.get('source') in ['discovery', 'hybrid'])
 
+        metrics['requests'] += 1
+        metrics['total_latency_ms'] += latency_ms
+
         return {
             "customer_id": customer_id,
             "week": week_key or weekly_cache.get_week_key() if weekly_cache else "unknown",
@@ -315,6 +318,7 @@ async def get_weekly_recommendations(customer_id: int):
         }
 
     except Exception as e:
+        metrics['errors'] += 1
         logger.error(f"Error getting weekly recommendations: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,

@@ -10,7 +10,11 @@ from api.models.recommendation_schemas import (
     ProductRecommendation,
     ErrorResponse
 )
-from ml.models.lightfm_recommender import LightFMRecommender
+
+try:
+    from ml.models.lightfm_recommender import LightFMRecommender
+except ImportError:
+    LightFMRecommender = None
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,12 @@ recommender = None
 
 def get_recommender() -> LightFMRecommender:
     global recommender
+    if LightFMRecommender is None:
+        logger.error("LightFM recommender backend is unavailable (import failed)")
+        raise HTTPException(
+            status_code=503,
+            detail="Recommendation model is not installed on this deployment."
+        )
     if recommender is None:
         logger.info("Initializing LightFM recommender...")
         recommender = LightFMRecommender(MODEL_PATH, DUCKDB_PATH)

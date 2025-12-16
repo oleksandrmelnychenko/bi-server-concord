@@ -12,9 +12,11 @@ DB_CONFIG = {
     'password': os.environ.get('MSSQL_PASSWORD', 'Grimm_jow92'),
 }
 
+# Using pyodbc with ODBC Driver 18 for SQL Server
 DATABASE_URL = (
-    f"mssql+pymssql://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
+    f"mssql+pyodbc://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
     f"@{DB_CONFIG['server']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
+    f"?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes"
 )
 
 engine = create_engine(

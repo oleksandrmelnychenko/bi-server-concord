@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  db-ai-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: db-ai-api
+    ports:
+      - "8000:8000"
+    environment:
+      # Database Configuration
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DRIVER=${DB_DRIVER}
+
+      # Ollama Configuration (host network on Mac)
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-sqlcoder:7b}
+
+      # API Configuration
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - API_RELOAD=False
+
+      # Security
+      - READ_ONLY_MODE=${READ_ONLY_MODE:-True}
+      - QUERY_TIMEOUT=${QUERY_TIMEOUT:-30}
+      - MAX_ROWS_RETURNED=${MAX_ROWS_RETURNED:-1000}
+
+      # RAG Configuration
+      - VECTOR_DB_PATH=/app/vector_db
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      - TOP_K_TABLES=${TOP_K_TABLES:-10}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_SQL_QUERIES=${LOG_SQL_QUERIES:-True}
+
+    volumes:
+      # Persist vector database
+      - ./vector_db:/app/vector_db
+      # Persist logs
+      - ./logs:/app/logs
+      # Persist schema cache
+      - ./schema_cache.json:/app/schema_cache.json
+
+    # Use host network on Mac to access Ollama
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  default:
+    name: db-ai-network
