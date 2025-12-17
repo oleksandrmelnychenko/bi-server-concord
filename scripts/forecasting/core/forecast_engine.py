@@ -31,8 +31,13 @@ class ForecastEngine:
         logger.info(f"ForecastEngine initialized for {forecast_weeks} weeks (placeholder: {self.placeholder})")
 
     def _detect_placeholder(self, conn) -> str:
+        # Check DBAPI paramstyle first
+        paramstyle = getattr(conn, "paramstyle", "").lower()
+        if paramstyle == "qmark":
+            return "?"
+        # Check module name
         module = getattr(conn, "__module__", "") or getattr(conn.__class__, "__module__", "")
-        if "pyodbc" in module.lower():
+        if "pyodbc" in module.lower() or "odbc" in str(type(conn)).lower():
             return "?"
         return "%s"
 

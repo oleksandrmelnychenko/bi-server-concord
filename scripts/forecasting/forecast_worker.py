@@ -4,7 +4,7 @@ import os
 import sys
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from multiprocessing import Pool, Manager
 from typing import List, Dict, Tuple
 import redis
@@ -20,7 +20,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-AS_OF_DATE = os.getenv('AS_OF_DATE', datetime.now().strftime('%Y-%m-%d'))
+# Handle empty string from docker-compose (AS_OF_DATE=${AS_OF_DATE:-})
+_as_of_env = os.getenv('AS_OF_DATE', '')
+AS_OF_DATE = _as_of_env if _as_of_env else datetime.now().strftime('%Y-%m-%d')
 REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
@@ -28,9 +30,10 @@ CACHE_TTL = int(os.getenv('FORECAST_CACHE_TTL', 604800))  # 7 days default
 NUM_WORKERS = int(os.getenv('FORECAST_WORKERS', 10))
 MIN_CUSTOMERS = int(os.getenv('FORECAST_MIN_CUSTOMERS', 2))
 MIN_ORDERS = int(os.getenv('FORECAST_MIN_ORDERS', 3))
+FORECAST_WEEKS = int(os.getenv('FORECAST_WEEKS', 12))
 
-def _process_product_worker(args: Tuple[int, int, int, str, int]) -> Dict:
-    product_id, index, total_count, as_of_date, cache_ttl = args
+def _process_product_worker(args: Tuple[int, int, int, str, int, int]) -> Dict:
+    product_id, index, total_count, as_of_date, cache_ttl, forecast_weeks = args
 
     try:
 
@@ -46,7 +49,7 @@ def _process_product_worker(args: Tuple[int, int, int, str, int]) -> Dict:
 
         try:
 
-            engine = ForecastEngine(conn=conn, forecast_weeks=12)
+            engine = ForecastEngine(conn=conn, forecast_weeks=forecast_weeks)
 
             start_time = time.time()
             forecast = engine.generate_forecast_cached(
@@ -105,6 +108,7 @@ class ForecastWorker:
         self.num_workers = NUM_WORKERS
         self.min_customers = MIN_CUSTOMERS
         self.min_orders = MIN_ORDERS
+        self.forecast_weeks = max(4, min(26, FORECAST_WEEKS))
 
         try:
             self.redis_client = redis.Redis(
@@ -122,8 +126,48 @@ class ForecastWorker:
 
         logger.info(f"ForecastWorker initialized:")
         logger.info(f"  AS_OF_DATE: {self.as_of_date}")
+        logger.info(f"  Forecast: 1 week historical + {self.forecast_weeks} weeks forecast (Mon-Fri)")
         logger.info(f"  Workers: {self.num_workers}")
         logger.info(f"  Cache TTL: {self.cache_ttl}s ({self.cache_ttl // 86400} days)")
+
+    def _get_current_week_key_prefix(self) -> str:
+        """Get the Monday-based week key prefix for cache keys."""
+        as_of_dt = datetime.fromisoformat(self.as_of_date)
+        monday = as_of_dt - timedelta(days=as_of_dt.weekday())
+        return f"forecast:product:*:week:{monday.strftime('%Y%m%d')}:h:{self.forecast_weeks}"
+
+    def clear_old_week_forecasts(self) -> int:
+        """
+        Clear forecast cache entries from previous weeks.
+        This ensures a clean slate when regenerating forecasts for a new week.
+        Returns the number of deleted keys.
+        """
+        try:
+            current_week_date = self._get_current_week_key_prefix().split(':')[-1]
+            deleted_count = 0
+
+            # Scan for all forecast:product:* keys
+            for key in self.redis_client.scan_iter("forecast:product:*:week:*"):
+                # Expected formats:
+                #  - forecast:product:{id}:week:{YYYYMMDD}
+                #  - forecast:product:{id}:week:{YYYYMMDD}:h:{weeks}
+                parts = key.split(':')
+                if len(parts) >= 5:
+                    week_date = parts[4] if parts[3] == 'week' else parts[-1]
+                    if week_date != current_week_date:
+                        self.redis_client.delete(key)
+                        deleted_count += 1
+
+            if deleted_count > 0:
+                logger.info(f"Cleared {deleted_count} old week forecast cache entries")
+            else:
+                logger.info("No old week forecast cache entries to clear")
+
+            return deleted_count
+
+        except Exception as e:
+            logger.warning(f"Failed to clear old week forecasts: {e}")
+            return 0
 
     def get_forecastable_products(self) -> List[int]:
         logger.info("Fetching forecastable products from database...")
@@ -131,17 +175,17 @@ class ForecastWorker:
         conn = get_connection()
         cursor = conn.cursor()
 
-        query = f"""
+        query = """
         SELECT oi.ProductID
         FROM dbo.OrderItem oi
         INNER JOIN dbo.[Order] o ON oi.OrderID = o.ID
         INNER JOIN dbo.ClientAgreement ca ON o.ClientAgreementID = ca.ID
         WHERE o.Created >= '2019-01-01'
-          AND o.Created < %s
+          AND o.Created < ?
           AND oi.ProductID IS NOT NULL
         GROUP BY oi.ProductID
-        HAVING COUNT(DISTINCT ca.ClientID) >= %s
-           AND COUNT(DISTINCT o.ID) >= %s
+        HAVING COUNT(DISTINCT ca.ClientID) >= ?
+           AND COUNT(DISTINCT o.ID) >= ?
         ORDER BY COUNT(DISTINCT o.ID) DESC
         """
 
@@ -161,6 +205,9 @@ class ForecastWorker:
         logger.info("FORECAST WORKER STARTING")
         logger.info("="*80)
 
+        # Clear old week forecasts before regenerating
+        self.clear_old_week_forecasts()
+
         products = self.get_forecastable_products()
 
         if not products:
@@ -175,7 +222,7 @@ class ForecastWorker:
             }
 
         args_list = [
-            (pid, idx, len(products), self.as_of_date, self.cache_ttl)
+            (pid, idx, len(products), self.as_of_date, self.cache_ttl, self.forecast_weeks)
             for idx, pid in enumerate(products)
         ]
 
@@ -215,6 +262,7 @@ class ForecastWorker:
         metadata = {
             'last_run': datetime.now().isoformat(),
             'as_of_date': self.as_of_date,
+            'forecast_weeks': self.forecast_weeks,
             'total_products': len(products),
             'successful': successful,
             'failed': failed,

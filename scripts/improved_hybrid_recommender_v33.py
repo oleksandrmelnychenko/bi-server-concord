@@ -189,16 +189,17 @@ class ImprovedHybridRecommenderV33:
         if not product_ids:
             return set()
 
-        placeholders = ','.join(['?'] * len(product_ids))
+        # Use string interpolation for IDs (safe - integers only)
+        ids_str = ','.join(str(int(pid)) for pid in product_ids)
         query = f"""
         SELECT ID FROM dbo.Product
-        WHERE ID IN ({placeholders})
+        WHERE ID IN ({ids_str})
           AND IsForSale = 1
           AND Deleted = 0
         """
 
         cursor = self._dict_cursor()
-        cursor.execute(query, product_ids)
+        cursor.execute(query)
 
         sellable = {row['ID'] for row in cursor}
         cursor.close()
@@ -307,8 +308,8 @@ class ImprovedHybridRecommenderV33:
             logger.warning(f"Customer {customer_id} has no purchase history")
             return []
 
-        # Parameterize the IN clause to avoid string injection
-        product_placeholders = ','.join(['?'] * len(target_products))
+        # Use string interpolation for product IDs (safe - integers only)
+        product_ids_str = ','.join(str(int(pid)) for pid in target_products)
 
         query = f"""
         SELECT DISTINCT ca.ClientID
@@ -316,15 +317,12 @@ class ImprovedHybridRecommenderV33:
         INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
         INNER JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
         WHERE ca.ClientID != ?
-              AND oi.ProductID IN ({product_placeholders})
+              AND oi.ProductID IN ({product_ids_str})
               AND o.Created < ?
         """
 
         cursor = self._dict_cursor()
-        params = [customer_id]
-        params.extend(list(target_products))
-        params.append(as_of_date)
-        cursor.execute(query, tuple(params))
+        cursor.execute(query, (customer_id, as_of_date))
 
         candidate_customers = [row['ClientID'] for row in cursor]
         cursor.close()
@@ -458,7 +456,8 @@ class ImprovedHybridRecommenderV33:
 
         cursor = self.conn.cursor()
 
-        ids_str = ','.join(['?'] * len(product_ids))
+        # Use string interpolation for product IDs (safe - integers only)
+        ids_str = ','.join(str(int(pid)) for pid in product_ids)
 
         query = f"""
         SELECT ProductID, ProductGroupID
@@ -467,7 +466,7 @@ class ImprovedHybridRecommenderV33:
               AND Deleted = 0
         """
 
-        cursor.execute(query, tuple(product_ids))
+        cursor.execute(query)
         rows = cursor.fetchall()
 
         groups = {}
@@ -549,7 +548,8 @@ class ImprovedHybridRecommenderV33:
             return {}
 
         as_of_date = self._normalize_date(as_of_date)
-        product_id_list = ','.join(['?'] * len(product_ids))
+        # Use string interpolation for product IDs (safe - integers only)
+        product_id_list = ','.join(str(int(pid)) for pid in product_ids)
 
         query = f"""
         WITH AgreementProducts AS (
@@ -594,15 +594,12 @@ class ImprovedHybridRecommenderV33:
         """
 
         cursor = self._dict_cursor()
-        params = [
+        params = (
             agreement_id, as_of_date, days_window, as_of_date,  # AgreementProducts
             agreement_id, as_of_date, days_window, as_of_date,  # CoOccurrence
-        ]
-        params.extend(product_ids)  # Candidate IN list
-        params.extend([
             agreement_id, as_of_date, days_window, as_of_date   # TotalOrders
-        ])
-        cursor.execute(query, tuple(params))
+        )
+        cursor.execute(query, params)
 
         scores = {}
         for row in cursor:
@@ -658,7 +655,8 @@ class ImprovedHybridRecommenderV33:
             return {}
 
         as_of_date = self._normalize_date(as_of_date)
-        product_id_list = ','.join(['?'] * len(product_ids))
+        # Use string interpolation for product IDs (safe - integers only)
+        product_id_list = ','.join(str(int(pid)) for pid in product_ids)
 
         query = f"""
         WITH PurchaseDates AS (
@@ -695,10 +693,7 @@ class ImprovedHybridRecommenderV33:
         """
 
         cursor = self._dict_cursor()
-        params = [agreement_id, as_of_date]
-        params.extend(product_ids)
-        params.append(as_of_date)
-        cursor.execute(query, tuple(params))
+        cursor.execute(query, (agreement_id, as_of_date, as_of_date))
 
         scores = {}
         as_of_datetime = datetime.strptime(as_of_date, '%Y-%m-%d')

@@ -88,7 +88,7 @@ class RFMAccuracyTester:
                 if (idx + 1) % 100 == 0:
                     logger.info(f"Progress: {idx + 1}/{len(products)} ({(idx + 1)/len(products)*100:.1f}%)")
 
-                engine = ForecastEngine(conn=conn, forecast_weeks=12)
+                engine = ForecastEngine(conn=conn)  # Fixed 4 weeks forecast (Mon-Fri)
                 forecast = engine.generate_forecast_cached(
                     product_id=product_id,
                     redis_client=self.redis_client,
@@ -99,7 +99,7 @@ class RFMAccuracyTester:
                 if forecast:
                     results[product_id] = {
                         'total_quantity': forecast.summary['total_predicted_quantity'],
-                        'total_revenue': forecast.summary['total_predicted_revenue'],
+                        'total_revenue': forecast.summary.get('total_predicted_revenue'),
                         'active_customers': forecast.summary['active_customers'],
                         'at_risk_customers': forecast.summary['at_risk_customers'],
                         'confidence': forecast.model_metadata['forecast_accuracy_estimate'],

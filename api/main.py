@@ -329,7 +329,9 @@ async def get_weekly_recommendations(customer_id: int):
     "/forecast/{product_id}",
     response_model=ProductForecastResponse,
     responses={404: {"model": ForecastErrorResponse}, 500: {"model": ForecastErrorResponse}},
-    tags=["Forecasting"]
+    tags=["Forecasting"],
+    summary="Get product demand forecast",
+    description="Returns 1 week historical (Mon-Fri) + configurable forecast horizon (Mon-Fri business weeks)"
 )
 async def get_product_forecast(
     product_id: int,
@@ -341,13 +343,23 @@ async def get_product_forecast(
         12,
         ge=4,
         le=26,
-        description="Number of weeks to forecast (4-26, default: 12 = ~3 months)"
+        description="Forecast horizon in weeks (Mon-Fri). Presets: 4 (short), 12 (default), 26 (long)."
     ),
     use_cache: bool = Query(
         True,
         description="Use Redis cache for performance"
     )
 ):
+    """
+    Get demand forecast for a specific product.
+
+    Returns:
+    - 1 week of historical actual data (Mon-Fri)
+    - N weeks of predicted data (Mon-Fri, default 12)
+    - Total: 1 + N weeks in weekly_data array
+
+    Week boundaries are Mon-Fri (business days only).
+    """
     start_time = time.time()
 
     try:
@@ -384,7 +396,7 @@ async def get_product_forecast(
 
             response_dict = {
                 'product_id': forecast.product_id,
-                'product_name': None,  # Will be enriched by engine
+                'product_name': forecast.product_name,
                 'forecast_period_weeks': forecast.forecast_period_weeks,
                 'historical_weeks': forecast.historical_weeks,
                 'summary': forecast.summary,

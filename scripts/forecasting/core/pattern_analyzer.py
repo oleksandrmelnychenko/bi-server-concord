@@ -177,6 +177,8 @@ class PatternAnalyzer:
         WHERE ca.ClientID = {ph}
               AND oi.ProductID = {ph}
               AND o.Created < {ph}
+              AND o.Deleted = 0
+              -- Include historical OrderItem rows even if marked deleted to recover history
         GROUP BY o.ID, o.Created
         ORDER BY o.Created
         """

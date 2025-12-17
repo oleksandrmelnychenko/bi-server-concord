@@ -6,7 +6,7 @@ from datetime import datetime
 
 class ExpectedCustomer(BaseModel):
     customer_id: int = Field(..., description="Customer ID")
-    customer_name: str = Field(..., description="Customer name")
+    customer_name: Optional[str] = Field(None, description="Customer name")
     probability: float = Field(..., ge=0, le=1, description="Probability of ordering this week")
     expected_quantity: float = Field(..., description="Expected order quantity")
     expected_date: str = Field(..., description="Expected order date (ISO format)")
@@ -16,12 +16,23 @@ class ExpectedCustomer(BaseModel):
 class WeeklyForecast(BaseModel):
     week_start: str = Field(..., description="Week start date (ISO format)")
     week_end: str = Field(..., description="Week end date (ISO format)")
-    quantity: float = Field(..., description="Quantity for week (actual or predicted)")
-    revenue: float = Field(..., description="Revenue for week (actual or predicted)")
-    orders: float = Field(..., description="Number of orders for week (actual or predicted)")
     data_type: str = Field(..., description="Data type: 'actual' or 'predicted'")
-    confidence_lower: Optional[float] = Field(None, description="95% CI lower (predictions only)")
-    confidence_upper: Optional[float] = Field(None, description="95% CI upper (predictions only)")
+
+    # Actual week fields (data_type='actual')
+    quantity: float = Field(default=0.0, description="Actual quantity for week")
+    revenue: Optional[float] = Field(default=None, description="Actual revenue for week (omitted)")
+    orders: float = Field(default=0.0, description="Actual number of orders for week")
+
+    # Predicted week fields (data_type='predicted')
+    predicted_quantity: float = Field(default=0.0, description="Predicted quantity for week")
+    predicted_revenue: Optional[float] = Field(default=None, description="Predicted revenue for week (omitted)")
+    predicted_orders: float = Field(default=0.0, description="Predicted number of orders for week")
+
+    # Confidence intervals (predictions only)
+    confidence_lower: float = Field(default=0.0, description="95% CI lower (predictions only)")
+    confidence_upper: float = Field(default=0.0, description="95% CI upper (predictions only)")
+
+    # Expected customers (predictions only)
     expected_customers: List[ExpectedCustomer] = Field(
         default_factory=list,
         description="List of customers expected to order this week (predictions only, prob >= 15%)"
@@ -29,20 +40,22 @@ class WeeklyForecast(BaseModel):
 
 class ForecastSummary(BaseModel):
     total_predicted_quantity: float = Field(..., description="Total predicted quantity for period")
-    total_predicted_revenue: float = Field(..., description="Total predicted revenue for period")
-    total_predicted_orders: float = Field(..., description="Total expected orders for period")
+    total_predicted_revenue: Optional[float] = Field(None, description="Total predicted revenue for period")
+    total_predicted_orders: Optional[float] = Field(None, description="Total expected orders for period")
+    average_weekly_quantity: Optional[float] = Field(None, description="Average weekly quantity")
+    historical_average: Optional[float] = Field(None, description="Historical average quantity")
     active_customers: int = Field(..., description="Number of active customers")
     at_risk_customers: int = Field(..., description="Number of at-risk customers")
 
 class TopCustomer(BaseModel):
     customer_id: int = Field(..., description="Customer ID")
-    customer_name: str = Field(..., description="Customer name")
+    customer_name: Optional[str] = Field(None, description="Customer name")
     predicted_quantity: float = Field(..., description="Total predicted quantity for period")
     contribution_pct: float = Field(..., description="Percentage contribution to total volume")
 
 class AtRiskCustomer(BaseModel):
     customer_id: int = Field(..., description="Customer ID")
-    customer_name: str = Field(..., description="Customer name")
+    customer_name: Optional[str] = Field(None, description="Customer name")
     last_order: str = Field(..., description="Date of last order (ISO format)")
     expected_reorder: str = Field(..., description="Expected reorder date (ISO format)")
     days_overdue: int = Field(..., description="Days overdue (0 if not overdue)")
@@ -91,30 +104,41 @@ class ProductForecastResponse(BaseModel):
             "example": {
                 "product_id": 25367399,
                 "product_name": "Widget Pro 3000",
-                "forecast_period_weeks": 12,
+                "forecast_period_weeks": 4,
+                "historical_weeks": 1,
                 "summary": {
-                    "total_predicted_quantity": 2450.0,
-                    "total_predicted_revenue": 85750.00,
-                    "total_predicted_orders": 87.0,
+                    "total_predicted_quantity": 612.0,
+                    "total_predicted_revenue": None,
+                    "total_predicted_orders": 22.0,
                     "active_customers": 34,
                     "at_risk_customers": 5
                 },
                 "weekly_data": [
                     {
-                        "week_start": "2025-11-11",
-                        "week_end": "2025-11-17",
-                        "quantity": 245.0,
-                        "revenue": 8575.00,
-                        "orders": 8.0,
-                        "confidence_lower": 180.0,
-                        "confidence_upper": 310.0,
+                        "week_start": "2025-12-09",
+                        "week_end": "2025-12-13",
+                        "data_type": "actual",
+                        "quantity": 145.0,
+                        "revenue": None,
+                        "orders": 5.0,
+                        "expected_customers": []
+                    },
+                    {
+                        "week_start": "2025-12-16",
+                        "week_end": "2025-12-20",
+                        "data_type": "predicted",
+                        "predicted_quantity": 153.0,
+                        "predicted_revenue": None,
+                        "predicted_orders": 5.5,
+                        "confidence_lower": 120.0,
+                        "confidence_upper": 186.0,
                         "expected_customers": [
                             {
                                 "customer_id": 412138,
                                 "customer_name": "Acme Corp",
                                 "probability": 0.85,
                                 "expected_quantity": 45.0,
-                                "expected_date": "2025-11-14",
+                                "expected_date": "2025-12-18",
                                 "days_since_last_order": 17,
                                 "avg_reorder_cycle": 21.0
                             }

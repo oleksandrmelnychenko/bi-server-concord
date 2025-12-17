@@ -1,0 +1,87 @@
+# Forecasting System - Docker Compose
+# ====================================
+# Deploys: Redis + API + Forecast Worker
+# Port: 8101 (API), 6381 (Redis)
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: forecast-redis
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - forecast-network
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.api
+    container_name: forecast-api
+    ports:
+      - "8101:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - MSSQL_HOST=${MSSQL_HOST:-78.152.175.67}
+      - MSSQL_PORT=${MSSQL_PORT:-1433}
+      - MSSQL_DATABASE=${MSSQL_DATABASE:-ConcordDb_v5}
+      - MSSQL_USER=${MSSQL_USER:-ef_migrator}
+      - MSSQL_PASSWORD=${MSSQL_PASSWORD:?MSSQL_PASSWORD is required}
+      - FORECAST_BIAS_UPLIFT=1.0
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - forecast-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  forecast-worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.api
+    container_name: forecast-worker
+    command: python3 scripts/forecasting/forecast_worker.py
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - MSSQL_HOST=${MSSQL_HOST:-78.152.175.67}
+      - MSSQL_PORT=${MSSQL_PORT:-1433}
+      - MSSQL_DATABASE=${MSSQL_DATABASE:-ConcordDb_v5}
+      - MSSQL_USER=${MSSQL_USER:-ef_migrator}
+      - MSSQL_PASSWORD=${MSSQL_PASSWORD:?MSSQL_PASSWORD is required}
+      - AS_OF_DATE=${AS_OF_DATE:-}  # Empty = uses datetime.now() in Python
+      - FORECAST_CACHE_TTL=${FORECAST_CACHE_TTL:-604800}
+      - FORECAST_WORKERS=${FORECAST_WORKERS:-10}
+      - FORECAST_MIN_CUSTOMERS=${FORECAST_MIN_CUSTOMERS:-2}
+      - FORECAST_MIN_ORDERS=${FORECAST_MIN_ORDERS:-3}
+      - FORECAST_BIAS_UPLIFT=1.0
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - forecast-network
+    restart: "no"
+
+networks:
+  forecast-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local

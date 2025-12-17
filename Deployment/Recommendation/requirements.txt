@@ -1,0 +1,38 @@
+# Recommendation API - Python Dependencies
+# =========================================
+# This file is a reference copy. The actual requirements.txt
+# is in the project root and is used by Docker during build.
+#
+# To update dependencies, edit: ../requirements.txt
+
+# Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.4.2
+pydantic-settings==2.0.3
+
+# Database
+pyodbc==5.2.0
+sqlalchemy==2.0.23
+
+# Cache
+redis==5.0.1
+
+# HTTP Client
+httpx==0.25.1
+requests==2.31.0
+
+# Configuration
+python-dotenv==1.0.0
+python-multipart==0.0.6
+
+# Logging
+structlog==23.2.0
+
+# ML/Data Processing
+numpy==1.26.2
+scipy==1.11.4
+scikit-learn==1.3.2
+
+# ANN Collaborative Filtering
+hnswlib==0.8.0

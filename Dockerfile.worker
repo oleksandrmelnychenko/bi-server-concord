@@ -36,44 +36,75 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create logs directory
-RUN mkdir -p /app/workers/logs
+RUN mkdir -p /app/workers/logs /app/data
 
-# Create cron job file
-RUN echo "0 2 * * 0 cd /app && /usr/local/bin/python3 workers/weekly_recommendation_worker.py >> /app/workers/logs/cron.log 2>&1" > /etc/cron.d/weekly-worker
+# Create cron jobs file with DAILY and WEEKLY schedules
+# DAILY at 2:00 AM - Regenerate ANN index (learning from new purchases)
+# WEEKLY on Sunday at 3:00 AM - Full recommendation batch generation
+RUN echo "# Daily ANN Learning Job - runs at 2:00 AM every day\n\
+0 2 * * * cd /app && /usr/local/bin/python3 scripts/build_ann_neighbors.py >> /app/workers/logs/daily_ann.log 2>&1\n\
+\n\
+# Weekly Recommendation Batch - runs at 3:00 AM every Sunday\n\
+0 3 * * 0 cd /app && /usr/local/bin/python3 workers/weekly_recommendation_worker.py >> /app/workers/logs/weekly_batch.log 2>&1\n\
+" > /etc/cron.d/recommendation-jobs
 
 # Give execution rights on the cron job
-RUN chmod 0644 /etc/cron.d/weekly-worker
+RUN chmod 0644 /etc/cron.d/recommendation-jobs
 
-# Apply cron job
-RUN crontab /etc/cron.d/weekly-worker
+# Apply cron jobs
+RUN crontab /etc/cron.d/recommendation-jobs
 
-# Create entrypoint script
+# Create entrypoint script with configurable schedules
 RUN echo '#!/bin/bash\n\
 set -e\n\
 \n\
-echo "Starting Weekly Recommendation Worker..."\n\
-echo "Cron schedule: ${CRON_SCHEDULE:-0 2 * * 0}"\n\
+echo "========================================"\n\
+echo "  Recommendation Worker Starting..."\n\
+echo "========================================"\n\
+echo ""\n\
 \n\
-# Update cron schedule if provided\n\
-if [ ! -z "$CRON_SCHEDULE" ]; then\n\
-    echo "$CRON_SCHEDULE cd /app && /usr/local/bin/python3 workers/weekly_recommendation_worker.py >> /app/workers/logs/cron.log 2>&1" > /etc/cron.d/weekly-worker\n\
-    chmod 0644 /etc/cron.d/weekly-worker\n\
-    crontab /etc/cron.d/weekly-worker\n\
-    echo "Updated cron schedule to: $CRON_SCHEDULE"\n\
+# Default schedules\n\
+DAILY_SCHEDULE="${DAILY_CRON_SCHEDULE:-0 2 * * *}"\n\
+WEEKLY_SCHEDULE="${WEEKLY_CRON_SCHEDULE:-0 3 * * 0}"\n\
+\n\
+echo "Scheduled Jobs:"\n\
+echo "  DAILY  (ANN Learning):  $DAILY_SCHEDULE"\n\
+echo "  WEEKLY (Batch Recs):    $WEEKLY_SCHEDULE"\n\
+echo ""\n\
+\n\
+# Update cron schedules from environment\n\
+echo "# Daily ANN Learning Job\n\
+$DAILY_SCHEDULE cd /app && /usr/local/bin/python3 scripts/build_ann_neighbors.py >> /app/workers/logs/daily_ann.log 2>&1\n\
+\n\
+# Weekly Recommendation Batch\n\
+$WEEKLY_SCHEDULE cd /app && /usr/local/bin/python3 workers/weekly_recommendation_worker.py >> /app/workers/logs/weekly_batch.log 2>&1\n\
+" > /etc/cron.d/recommendation-jobs\n\
+\n\
+chmod 0644 /etc/cron.d/recommendation-jobs\n\
+crontab /etc/cron.d/recommendation-jobs\n\
+\n\
+# Run ANN generation on startup if requested\n\
+if [ "$GENERATE_ANN_ON_STARTUP" = "true" ]; then\n\
+    echo "Generating ANN index on startup..."\n\
+    python3 scripts/build_ann_neighbors.py || echo "ANN generation failed"\n\
 fi\n\
 \n\
-# Run worker once on startup (optional)\n\
-if [ "$RUN_ON_STARTUP" = "true" ]; then\n\
-    echo "Running worker on startup..."\n\
-    python3 workers/weekly_recommendation_worker.py\n\
+# Run weekly batch on startup if requested\n\
+if [ "$RUN_BATCH_ON_STARTUP" = "true" ]; then\n\
+    echo "Running recommendation batch on startup..."\n\
+    python3 workers/weekly_recommendation_worker.py || echo "Batch failed"\n\
 fi\n\
+\n\
+echo ""\n\
+echo "Starting cron daemon..."\n\
+echo "Logs: /app/workers/logs/"\n\
+echo "========================================"\n\
 \n\
 # Start cron in foreground\n\
-echo "Starting cron daemon..."\n\
 cron -f\n\
 ' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
-# Healthcheck
+# Healthcheck - verify cron is running
 HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
     CMD pgrep cron || exit 1
 

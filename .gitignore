@@ -52,3 +52,7 @@ dump.rdb
 
 # Docker
 .dockerignore
+
+# ChromaDB (large vector database files)
+db-ai-api/chroma_db/
+**/chroma_db/

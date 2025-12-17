@@ -68,7 +68,10 @@ def test_forecast(product_id: int, as_of_date: str = "2024-07-01"):
             logger.info(f"Forecast Period: {forecast.forecast_period_weeks} weeks")
             logger.info("")
             logger.info(f"Total Predicted Quantity: {forecast.summary['total_predicted_quantity']}")
-            logger.info(f"Total Predicted Revenue: ${forecast.summary['total_predicted_revenue']:,.2f}")
+            if forecast.summary.get('total_predicted_revenue') is not None:
+                logger.info(f"Total Predicted Revenue: ${forecast.summary['total_predicted_revenue']:,.2f}")
+            else:
+                logger.info("Total Predicted Revenue: not reported")
             logger.info(f"Total Predicted Orders: {forecast.summary['total_predicted_orders']}")
             logger.info(f"Active Customers: {forecast.summary['active_customers']}")
             logger.info(f"At-Risk Customers: {forecast.summary['at_risk_customers']}")
@@ -86,7 +89,8 @@ def test_forecast(product_id: int, as_of_date: str = "2024-07-01"):
             for i, week in enumerate(forecast.weekly_forecasts[:3]):
                 logger.info(f"\n  Week {i+1}: {week['week_start']} to {week['week_end']}")
                 logger.info(f"    Quantity: {week['predicted_quantity']} (CI: {week['confidence_lower']}-{week['confidence_upper']})")
-                logger.info(f"    Revenue: ${week['predicted_revenue']:,.2f}")
+                if week.get('predicted_revenue') is not None:
+                    logger.info(f"    Revenue: ${week['predicted_revenue']:,.2f}")
                 logger.info(f"    Orders: {week['predicted_orders']}")
                 logger.info(f"    Expected Customers: {len(week['expected_customers'])}")
 

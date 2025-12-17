@@ -1,0 +1,96 @@
+# Recommendation System - Docker Compose
+# =======================================
+# Deploys: Redis + API + Worker (daily/weekly batch jobs)
+# Port: 8100 (API), 6380 (Redis)
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: recommendation-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - recommendation-network
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.api
+    container_name: recommendation-api
+    ports:
+      - "8100:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - MSSQL_HOST=${MSSQL_HOST:-78.152.175.67}
+      - MSSQL_PORT=${MSSQL_PORT:-1433}
+      - MSSQL_DATABASE=${MSSQL_DATABASE:-ConcordDb_v5}
+      - MSSQL_USER=${MSSQL_USER:-ef_migrator}
+      - MSSQL_PASSWORD=${MSSQL_PASSWORD:?MSSQL_PASSWORD is required}
+      - ANN_NEIGHBORS_PATH=/app/data/ann_neighbors.json
+    volumes:
+      - ../../data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - recommendation-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.worker
+    container_name: recommendation-worker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - MSSQL_HOST=${MSSQL_HOST:-78.152.175.67}
+      - MSSQL_PORT=${MSSQL_PORT:-1433}
+      - MSSQL_DATABASE=${MSSQL_DATABASE:-ConcordDb_v5}
+      - MSSQL_USER=${MSSQL_USER:-ef_migrator}
+      - MSSQL_PASSWORD=${MSSQL_PASSWORD:?MSSQL_PASSWORD is required}
+      - AS_OF_DATE=${AS_OF_DATE:-}
+      # Scheduled Jobs
+      - DAILY_CRON_SCHEDULE=${DAILY_CRON_SCHEDULE:-0 2 * * *}    # Daily 2 AM - ANN Learning
+      - WEEKLY_CRON_SCHEDULE=${WEEKLY_CRON_SCHEDULE:-0 3 * * 0}  # Sunday 3 AM - Batch Recs
+      - GENERATE_ANN_ON_STARTUP=${GENERATE_ANN_ON_STARTUP:-false}
+      - RUN_BATCH_ON_STARTUP=${RUN_BATCH_ON_STARTUP:-false}
+      - ANN_NEIGHBORS_PATH=/app/data/ann_neighbors.json
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - recommendation-network
+    restart: unless-stopped
+    volumes:
+      - ../../workers:/app/workers
+      - worker_logs:/app/workers/logs
+      - ../../data:/app/data
+      - ../../scripts:/app/scripts
+
+networks:
+  recommendation-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
+  worker_logs:
+    driver: local

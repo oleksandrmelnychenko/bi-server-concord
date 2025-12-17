@@ -18,12 +18,12 @@ Environment:
   ANN_EF_CONSTRUCT (default 200)
   ANN_K (neighbors per item, default 200)
   ANN_MIN_INTERACTIONS (default 2)
-  ANN_LOOKBACK_START (default '2021-01-01')
+  ANN_LOOKBACK_START (default: 3 years back from today)
 """
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 
 import pyodbc
@@ -43,7 +43,7 @@ DB_CONFIG = {
     "port": int(os.getenv("MSSQL_PORT", "1433")),
     "database": os.getenv("MSSQL_DATABASE", "ConcordDb_v5"),
     "user": os.getenv("MSSQL_USER", "ef_migrator"),
-    "password": os.getenv("MSSQL_PASSWORD", "Grimm_jow92"),
+    "password": os.getenv("MSSQL_PASSWORD"),  # Required - no default for security
 }
 
 ANN_OUTPUT_PATH = os.getenv("ANN_OUTPUT_PATH", "ann_neighbors.json")
@@ -52,7 +52,10 @@ ANN_M = int(os.getenv("ANN_M", "32"))
 ANN_EF_CONSTRUCT = int(os.getenv("ANN_EF_CONSTRUCT", "200"))
 ANN_K = int(os.getenv("ANN_K", "200"))
 ANN_MIN_INTERACTIONS = int(os.getenv("ANN_MIN_INTERACTIONS", "2"))
-ANN_LOOKBACK_START = os.getenv("ANN_LOOKBACK_START", "2021-01-01")
+# Default: 3 years back from today (safe for leap years)
+# Using timedelta avoids Feb 29 crash with datetime.replace(year=...)
+_default_lookback = (datetime.now() - timedelta(days=3*365)).strftime('%Y-%m-%d')
+ANN_LOOKBACK_START = os.getenv("ANN_LOOKBACK_START", _default_lookback)
 
 
 def fetch_interactions(as_of_date: str):
