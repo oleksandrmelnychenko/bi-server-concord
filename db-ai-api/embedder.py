@@ -90,11 +90,23 @@ class RAGEmbedder:
         print(f"📊 Total documents to embed: {len(documents)}")
         print(f"📦 Batch size: {batch_size}\n")
 
-        # Prepare data for ChromaDB
-        all_ids = []
-        all_embeddings = []
-        all_metadatas = []
-        all_documents = []
+        # Resume support: get already embedded IDs
+        existing_count = self.collection.count()
+        existing_ids = set()
+        if existing_count > 0:
+            print(f"🔄 Found {existing_count:,} existing embeddings - enabling resume mode")
+            # Get existing IDs in chunks to avoid memory issues
+            for offset in range(0, existing_count, 10000):
+                chunk = self.collection.get(limit=10000, offset=offset, include=[])
+                existing_ids.update(chunk['ids'])
+            print(f"✓ Loaded {len(existing_ids):,} existing IDs to skip")
+
+        # Buffer for incremental saving (save every 500 docs to save memory)
+        save_every = 500
+        buf_ids = []
+        buf_emb = []
+        buf_meta = []
+        buf_docs = []
 
         # Process in batches
         iterator = range(0, len(documents), batch_size)
@@ -103,73 +115,49 @@ class RAGEmbedder:
 
         for i in iterator:
             batch = documents[i:i + batch_size]
+            # Skip already embedded docs
+            batch = [doc for doc in batch if doc["id"] not in existing_ids]
+            if not batch:
+                continue
 
             try:
-                # Extract texts
                 texts = [doc["content"] for doc in batch]
+                embeddings = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
 
-                # Create embeddings
-                embeddings = self.model.encode(
-                    texts,
-                    convert_to_numpy=True,
-                    show_progress_bar=False
-                )
-
-                # Prepare for ChromaDB
                 for j, doc in enumerate(batch):
-                    doc_id = doc["id"]
-
-                    # Metadata (ChromaDB doesn't support nested dicts, so flatten)
                     metadata = {
                         "table": doc["table"],
                         "primary_key": doc["primary_key"],
                         "primary_key_value": str(doc["primary_key_value"]),
                         "created_at": doc["created_at"]
                     }
-
-                    # Add a few key fields from raw_data to metadata
                     raw_data = doc.get("raw_data", {})
                     if "Name" in raw_data and raw_data["Name"]:
                         metadata["name"] = str(raw_data["Name"])[:500]
                     if "City" in raw_data and raw_data["City"]:
                         metadata["city"] = str(raw_data["City"])[:100]
 
-                    all_ids.append(doc_id)
-                    all_embeddings.append(embeddings[j].tolist())
-                    all_metadatas.append(metadata)
-                    all_documents.append(doc["content"])
+                    buf_ids.append(doc["id"])
+                    buf_emb.append(embeddings[j].tolist())
+                    buf_meta.append(metadata)
+                    buf_docs.append(doc["content"])
 
                 stats["embedded_documents"] += len(batch)
 
+                # Save to ChromaDB every 500 docs to free memory
+                if len(buf_ids) >= save_every:
+                    self.collection.add(ids=buf_ids, embeddings=buf_emb, metadatas=buf_meta, documents=buf_docs)
+                    buf_ids, buf_emb, buf_meta, buf_docs = [], [], [], []
+
             except Exception as e:
-                error_msg = f"Error embedding batch at index {i}: {str(e)}"
+                error_msg = f"Error at batch {i}: {str(e)}"
                 stats["errors"].append(error_msg)
                 print(f"\n✗ {error_msg}")
                 stats["skipped_documents"] += len(batch)
 
-        # Store in ChromaDB
-        if all_ids:
-            print("\n💾 Storing embeddings in ChromaDB...")
-
-            try:
-                # Add in chunks to avoid memory issues
-                chunk_size = 1000
-                for i in tqdm(range(0, len(all_ids), chunk_size), desc="Storing chunks"):
-                    end_idx = min(i + chunk_size, len(all_ids))
-
-                    self.collection.add(
-                        ids=all_ids[i:end_idx],
-                        embeddings=all_embeddings[i:end_idx],
-                        metadatas=all_metadatas[i:end_idx],
-                        documents=all_documents[i:end_idx]
-                    )
-
-                print(f"✓ Stored {len(all_ids)} embeddings in ChromaDB")
-
-            except Exception as e:
-                error_msg = f"Error storing in ChromaDB: {str(e)}"
-                stats["errors"].append(error_msg)
-                print(f"✗ {error_msg}")
+        # Save remaining
+        if buf_ids:
+            self.collection.add(ids=buf_ids, embeddings=buf_emb, metadatas=buf_meta, documents=buf_docs)
 
         stats["completed_at"] = datetime.now().isoformat()
 
