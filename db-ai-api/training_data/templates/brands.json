@@ -1,0 +1,1560 @@
+{
+  "domain": "brands",
+  "description": "Auto-generated brand-specific query examples for 97 brands",
+  "generated_from": "vendor_codes.json",
+  "min_product_count": 500,
+  "examples": [
+    {
+      "id": "brand_aug_001_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with AUG code",
+      "question_uk": "Знайди товари з кодом AUG",
+      "variations_en": [
+        "AUG products",
+        "show AUG items",
+        "products with AUG",
+        "list AUG products",
+        "show all AUG products",
+        "all AUG items"
+      ],
+      "variations_uk": [
+        "товари AUG",
+        "покажи AUG",
+        "продукти з AUG",
+        "покажи всі товари AUG",
+        "всі товари AUG",
+        "список товарів AUG",
+        "знайти AUG"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'AUG%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "AUG",
+        "product_count": 17878
+      }
+    },
+    {
+      "id": "brand_aug_001_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling AUG products",
+      "question_uk": "Топ продажів AUG",
+      "variations_en": [
+        "best selling AUG",
+        "AUG sales ranking",
+        "most sold AUG products",
+        "top AUG sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі AUG",
+        "лідери продажів AUG",
+        "топ AUG",
+        "найпопулярніші AUG"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'AUG%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "AUG",
+        "product_count": 17878
+      }
+    },
+    {
+      "id": "brand_mg1_002_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with MG1 code",
+      "question_uk": "Знайди товари з кодом MG1",
+      "variations_en": [
+        "MG1 products",
+        "show MG1 items",
+        "products with MG1",
+        "list MG1 products",
+        "show all MG1 products",
+        "all MG1 items"
+      ],
+      "variations_uk": [
+        "товари MG1",
+        "покажи MG1",
+        "продукти з MG1",
+        "покажи всі товари MG1",
+        "всі товари MG1",
+        "список товарів MG1",
+        "знайти MG1"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'MG1%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "MG1",
+        "product_count": 13612
+      }
+    },
+    {
+      "id": "brand_mg1_002_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling MG1 products",
+      "question_uk": "Топ продажів MG1",
+      "variations_en": [
+        "best selling MG1",
+        "MG1 sales ranking",
+        "most sold MG1 products",
+        "top MG1 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі MG1",
+        "лідери продажів MG1",
+        "топ MG1",
+        "найпопулярніші MG1"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'MG1%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "MG1",
+        "product_count": 13612
+      }
+    },
+    {
+      "id": "brand_sem_003_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with SEM code",
+      "question_uk": "Знайди товари з кодом SEM",
+      "variations_en": [
+        "SEM products",
+        "show SEM items",
+        "products with SEM",
+        "list SEM products",
+        "show all SEM products",
+        "all SEM items"
+      ],
+      "variations_uk": [
+        "товари SEM",
+        "покажи SEM",
+        "продукти з SEM",
+        "покажи всі товари SEM",
+        "всі товари SEM",
+        "список товарів SEM",
+        "знайти SEM"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'SEM%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "SEM",
+        "product_count": 11480
+      }
+    },
+    {
+      "id": "brand_sem_003_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling SEM products",
+      "question_uk": "Топ продажів SEM",
+      "variations_en": [
+        "best selling SEM",
+        "SEM sales ranking",
+        "most sold SEM products",
+        "top SEM sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі SEM",
+        "лідери продажів SEM",
+        "топ SEM",
+        "найпопулярніші SEM"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'SEM%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "SEM",
+        "product_count": 11480
+      }
+    },
+    {
+      "id": "brand_mg2_004_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with MG2 code",
+      "question_uk": "Знайди товари з кодом MG2",
+      "variations_en": [
+        "MG2 products",
+        "show MG2 items",
+        "products with MG2",
+        "list MG2 products",
+        "show all MG2 products",
+        "all MG2 items"
+      ],
+      "variations_uk": [
+        "товари MG2",
+        "покажи MG2",
+        "продукти з MG2",
+        "покажи всі товари MG2",
+        "всі товари MG2",
+        "список товарів MG2",
+        "знайти MG2"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'MG2%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "MG2",
+        "product_count": 9942
+      }
+    },
+    {
+      "id": "brand_mg2_004_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling MG2 products",
+      "question_uk": "Топ продажів MG2",
+      "variations_en": [
+        "best selling MG2",
+        "MG2 sales ranking",
+        "most sold MG2 products",
+        "top MG2 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі MG2",
+        "лідери продажів MG2",
+        "топ MG2",
+        "найпопулярніші MG2"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'MG2%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "MG2",
+        "product_count": 9942
+      }
+    },
+    {
+      "id": "brand_fe1_005_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with FE1 code",
+      "question_uk": "Знайди товари з кодом FE1",
+      "variations_en": [
+        "FE1 products",
+        "show FE1 items",
+        "products with FE1",
+        "list FE1 products",
+        "show all FE1 products",
+        "all FE1 items"
+      ],
+      "variations_uk": [
+        "товари FE1",
+        "покажи FE1",
+        "продукти з FE1",
+        "покажи всі товари FE1",
+        "всі товари FE1",
+        "список товарів FE1",
+        "знайти FE1"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'FE1%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "FE1",
+        "product_count": 8563
+      }
+    },
+    {
+      "id": "brand_fe1_005_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling FE1 products",
+      "question_uk": "Топ продажів FE1",
+      "variations_en": [
+        "best selling FE1",
+        "FE1 sales ranking",
+        "most sold FE1 products",
+        "top FE1 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі FE1",
+        "лідери продажів FE1",
+        "топ FE1",
+        "найпопулярніші FE1"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'FE1%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "FE1",
+        "product_count": 8563
+      }
+    },
+    {
+      "id": "brand_fe2_006_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with FE2 code",
+      "question_uk": "Знайди товари з кодом FE2",
+      "variations_en": [
+        "FE2 products",
+        "show FE2 items",
+        "products with FE2",
+        "list FE2 products",
+        "show all FE2 products",
+        "all FE2 items"
+      ],
+      "variations_uk": [
+        "товари FE2",
+        "покажи FE2",
+        "продукти з FE2",
+        "покажи всі товари FE2",
+        "всі товари FE2",
+        "список товарів FE2",
+        "знайти FE2"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'FE2%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "FE2",
+        "product_count": 7849
+      }
+    },
+    {
+      "id": "brand_fe2_006_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling FE2 products",
+      "question_uk": "Топ продажів FE2",
+      "variations_en": [
+        "best selling FE2",
+        "FE2 sales ranking",
+        "most sold FE2 products",
+        "top FE2 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі FE2",
+        "лідери продажів FE2",
+        "топ FE2",
+        "найпопулярніші FE2"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'FE2%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "FE2",
+        "product_count": 7849
+      }
+    },
+    {
+      "id": "brand_fe0_007_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with FE0 code",
+      "question_uk": "Знайди товари з кодом FE0",
+      "variations_en": [
+        "FE0 products",
+        "show FE0 items",
+        "products with FE0",
+        "list FE0 products",
+        "show all FE0 products",
+        "all FE0 items"
+      ],
+      "variations_uk": [
+        "товари FE0",
+        "покажи FE0",
+        "продукти з FE0",
+        "покажи всі товари FE0",
+        "всі товари FE0",
+        "список товарів FE0",
+        "знайти FE0"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'FE0%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "FE0",
+        "product_count": 7368
+      }
+    },
+    {
+      "id": "brand_fe0_007_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling FE0 products",
+      "question_uk": "Топ продажів FE0",
+      "variations_en": [
+        "best selling FE0",
+        "FE0 sales ranking",
+        "most sold FE0 products",
+        "top FE0 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі FE0",
+        "лідери продажів FE0",
+        "топ FE0",
+        "найпопулярніші FE0"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'FE0%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "FE0",
+        "product_count": 7368
+      }
+    },
+    {
+      "id": "brand_fe3_008_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with FE3 code",
+      "question_uk": "Знайди товари з кодом FE3",
+      "variations_en": [
+        "FE3 products",
+        "show FE3 items",
+        "products with FE3",
+        "list FE3 products",
+        "show all FE3 products",
+        "all FE3 items"
+      ],
+      "variations_uk": [
+        "товари FE3",
+        "покажи FE3",
+        "продукти з FE3",
+        "покажи всі товари FE3",
+        "всі товари FE3",
+        "список товарів FE3",
+        "знайти FE3"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'FE3%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "FE3",
+        "product_count": 6055
+      }
+    },
+    {
+      "id": "brand_fe3_008_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling FE3 products",
+      "question_uk": "Топ продажів FE3",
+      "variations_en": [
+        "best selling FE3",
+        "FE3 sales ranking",
+        "most sold FE3 products",
+        "top FE3 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі FE3",
+        "лідери продажів FE3",
+        "топ FE3",
+        "найпопулярніші FE3"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'FE3%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "FE3",
+        "product_count": 6055
+      }
+    },
+    {
+      "id": "brand_mg3_009_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with MG3 code",
+      "question_uk": "Знайди товари з кодом MG3",
+      "variations_en": [
+        "MG3 products",
+        "show MG3 items",
+        "products with MG3",
+        "list MG3 products",
+        "show all MG3 products",
+        "all MG3 items"
+      ],
+      "variations_uk": [
+        "товари MG3",
+        "покажи MG3",
+        "продукти з MG3",
+        "покажи всі товари MG3",
+        "всі товари MG3",
+        "список товарів MG3",
+        "знайти MG3"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'MG3%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "MG3",
+        "product_count": 5943
+      }
+    },
+    {
+      "id": "brand_mg3_009_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling MG3 products",
+      "question_uk": "Топ продажів MG3",
+      "variations_en": [
+        "best selling MG3",
+        "MG3 sales ranking",
+        "most sold MG3 products",
+        "top MG3 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі MG3",
+        "лідери продажів MG3",
+        "топ MG3",
+        "найпопулярніші MG3"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'MG3%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "MG3",
+        "product_count": 5943
+      }
+    },
+    {
+      "id": "brand_6fh_014_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with 6FH code",
+      "question_uk": "Знайди товари з кодом 6FH",
+      "variations_en": [
+        "6FH products",
+        "show 6FH items",
+        "products with 6FH",
+        "list 6FH products",
+        "show all 6FH products",
+        "all 6FH items"
+      ],
+      "variations_uk": [
+        "товари 6FH",
+        "покажи 6FH",
+        "продукти з 6FH",
+        "покажи всі товари 6FH",
+        "всі товари 6FH",
+        "список товарів 6FH",
+        "знайти 6FH"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'6FH%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "6FH",
+        "product_count": 2517
+      }
+    },
+    {
+      "id": "brand_6fh_014_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling 6FH products",
+      "question_uk": "Топ продажів 6FH",
+      "variations_en": [
+        "best selling 6FH",
+        "6FH sales ranking",
+        "most sold 6FH products",
+        "top 6FH sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі 6FH",
+        "лідери продажів 6FH",
+        "топ 6FH",
+        "найпопулярніші 6FH"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'6FH%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "6FH",
+        "product_count": 2517
+      }
+    },
+    {
+      "id": "brand_rl3_017_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with RL3 code",
+      "question_uk": "Знайди товари з кодом RL3",
+      "variations_en": [
+        "RL3 products",
+        "show RL3 items",
+        "products with RL3",
+        "list RL3 products",
+        "show all RL3 products",
+        "all RL3 items"
+      ],
+      "variations_uk": [
+        "товари RL3",
+        "покажи RL3",
+        "продукти з RL3",
+        "покажи всі товари RL3",
+        "всі товари RL3",
+        "список товарів RL3",
+        "знайти RL3"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'RL3%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "RL3",
+        "product_count": 2327
+      }
+    },
+    {
+      "id": "brand_rl3_017_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling RL3 products",
+      "question_uk": "Топ продажів RL3",
+      "variations_en": [
+        "best selling RL3",
+        "RL3 sales ranking",
+        "most sold RL3 products",
+        "top RL3 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі RL3",
+        "лідери продажів RL3",
+        "топ RL3",
+        "найпопулярніші RL3"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'RL3%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "RL3",
+        "product_count": 2327
+      }
+    },
+    {
+      "id": "brand_h10_024_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with H10 code",
+      "question_uk": "Знайди товари з кодом H10",
+      "variations_en": [
+        "H10 products",
+        "show H10 items",
+        "products with H10",
+        "list H10 products",
+        "show all H10 products",
+        "all H10 items"
+      ],
+      "variations_uk": [
+        "товари H10",
+        "покажи H10",
+        "продукти з H10",
+        "покажи всі товари H10",
+        "всі товари H10",
+        "список товарів H10",
+        "знайти H10"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'H10%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "H10",
+        "product_count": 1794
+      }
+    },
+    {
+      "id": "brand_h10_024_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling H10 products",
+      "question_uk": "Топ продажів H10",
+      "variations_en": [
+        "best selling H10",
+        "H10 sales ranking",
+        "most sold H10 products",
+        "top H10 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі H10",
+        "лідери продажів H10",
+        "топ H10",
+        "найпопулярніші H10"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'H10%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "H10",
+        "product_count": 1794
+      }
+    },
+    {
+      "id": "brand_f00_025_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with F00 code",
+      "question_uk": "Знайди товари з кодом F00",
+      "variations_en": [
+        "F00 products",
+        "show F00 items",
+        "products with F00",
+        "list F00 products",
+        "show all F00 products",
+        "all F00 items"
+      ],
+      "variations_uk": [
+        "товари F00",
+        "покажи F00",
+        "продукти з F00",
+        "покажи всі товари F00",
+        "всі товари F00",
+        "список товарів F00",
+        "знайти F00"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'F00%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "F00",
+        "product_count": 1758
+      }
+    },
+    {
+      "id": "brand_f00_025_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling F00 products",
+      "question_uk": "Топ продажів F00",
+      "variations_en": [
+        "best selling F00",
+        "F00 sales ranking",
+        "most sold F00 products",
+        "top F00 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі F00",
+        "лідери продажів F00",
+        "топ F00",
+        "найпопулярніші F00"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'F00%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "F00",
+        "product_count": 1758
+      }
+    },
+    {
+      "id": "brand_sab_026_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with SAB code",
+      "question_uk": "Знайди товари з кодом SAB",
+      "variations_en": [
+        "SAB products",
+        "show SAB items",
+        "products with SAB",
+        "list SAB products",
+        "show all SAB products",
+        "all SAB items"
+      ],
+      "variations_uk": [
+        "товари SAB",
+        "покажи SAB",
+        "продукти з SAB",
+        "покажи всі товари SAB",
+        "всі товари SAB",
+        "список товарів SAB",
+        "знайти SAB"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'SAB%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "SAB",
+        "product_count": 1746
+      }
+    },
+    {
+      "id": "brand_sab_026_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling SAB products",
+      "question_uk": "Топ продажів SAB",
+      "variations_en": [
+        "best selling SAB",
+        "SAB sales ranking",
+        "most sold SAB products",
+        "top SAB sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі SAB",
+        "лідери продажів SAB",
+        "топ SAB",
+        "найпопулярніші SAB"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'SAB%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "SAB",
+        "product_count": 1746
+      }
+    },
+    {
+      "id": "brand_1.1_030_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with 1.1 code",
+      "question_uk": "Знайди товари з кодом 1.1",
+      "variations_en": [
+        "1.1 products",
+        "show 1.1 items",
+        "products with 1.1",
+        "list 1.1 products",
+        "show all 1.1 products",
+        "all 1.1 items"
+      ],
+      "variations_uk": [
+        "товари 1.1",
+        "покажи 1.1",
+        "продукти з 1.1",
+        "покажи всі товари 1.1",
+        "всі товари 1.1",
+        "список товарів 1.1",
+        "знайти 1.1"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'1.1%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "1.1",
+        "product_count": 1539
+      }
+    },
+    {
+      "id": "brand_1.1_030_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling 1.1 products",
+      "question_uk": "Топ продажів 1.1",
+      "variations_en": [
+        "best selling 1.1",
+        "1.1 sales ranking",
+        "most sold 1.1 products",
+        "top 1.1 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі 1.1",
+        "лідери продажів 1.1",
+        "топ 1.1",
+        "найпопулярніші 1.1"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'1.1%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "1.1",
+        "product_count": 1539
+      }
+    },
+    {
+      "id": "brand_fe8_031_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with FE8 code",
+      "question_uk": "Знайди товари з кодом FE8",
+      "variations_en": [
+        "FE8 products",
+        "show FE8 items",
+        "products with FE8",
+        "list FE8 products",
+        "show all FE8 products",
+        "all FE8 items"
+      ],
+      "variations_uk": [
+        "товари FE8",
+        "покажи FE8",
+        "продукти з FE8",
+        "покажи всі товари FE8",
+        "всі товари FE8",
+        "список товарів FE8",
+        "знайти FE8"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'FE8%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "FE8",
+        "product_count": 1523
+      }
+    },
+    {
+      "id": "brand_fe8_031_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling FE8 products",
+      "question_uk": "Топ продажів FE8",
+      "variations_en": [
+        "best selling FE8",
+        "FE8 sales ranking",
+        "most sold FE8 products",
+        "top FE8 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі FE8",
+        "лідери продажів FE8",
+        "топ FE8",
+        "найпопулярніші FE8"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'FE8%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "FE8",
+        "product_count": 1523
+      }
+    },
+    {
+      "id": "brand_fe4_037_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with FE4 code",
+      "question_uk": "Знайди товари з кодом FE4",
+      "variations_en": [
+        "FE4 products",
+        "show FE4 items",
+        "products with FE4",
+        "list FE4 products",
+        "show all FE4 products",
+        "all FE4 items"
+      ],
+      "variations_uk": [
+        "товари FE4",
+        "покажи FE4",
+        "продукти з FE4",
+        "покажи всі товари FE4",
+        "всі товари FE4",
+        "список товарів FE4",
+        "знайти FE4"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'FE4%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "FE4",
+        "product_count": 1230
+      }
+    },
+    {
+      "id": "brand_fe4_037_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling FE4 products",
+      "question_uk": "Топ продажів FE4",
+      "variations_en": [
+        "best selling FE4",
+        "FE4 sales ranking",
+        "most sold FE4 products",
+        "top FE4 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі FE4",
+        "лідери продажів FE4",
+        "топ FE4",
+        "найпопулярніші FE4"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'FE4%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "FE4",
+        "product_count": 1230
+      }
+    },
+    {
+      "id": "brand_1.2_040_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with 1.2 code",
+      "question_uk": "Знайди товари з кодом 1.2",
+      "variations_en": [
+        "1.2 products",
+        "show 1.2 items",
+        "products with 1.2",
+        "list 1.2 products",
+        "show all 1.2 products",
+        "all 1.2 items"
+      ],
+      "variations_uk": [
+        "товари 1.2",
+        "покажи 1.2",
+        "продукти з 1.2",
+        "покажи всі товари 1.2",
+        "всі товари 1.2",
+        "список товарів 1.2",
+        "знайти 1.2"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'1.2%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "1.2",
+        "product_count": 1150
+      }
+    },
+    {
+      "id": "brand_1.2_040_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling 1.2 products",
+      "question_uk": "Топ продажів 1.2",
+      "variations_en": [
+        "best selling 1.2",
+        "1.2 sales ranking",
+        "most sold 1.2 products",
+        "top 1.2 sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі 1.2",
+        "лідери продажів 1.2",
+        "топ 1.2",
+        "найпопулярніші 1.2"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'1.2%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "1.2",
+        "product_count": 1150
+      }
+    },
+    {
+      "id": "brand_rld_042_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with RLD code",
+      "question_uk": "Знайди товари з кодом RLD",
+      "variations_en": [
+        "RLD products",
+        "show RLD items",
+        "products with RLD",
+        "list RLD products",
+        "show all RLD products",
+        "all RLD items"
+      ],
+      "variations_uk": [
+        "товари RLD",
+        "покажи RLD",
+        "продукти з RLD",
+        "покажи всі товари RLD",
+        "всі товари RLD",
+        "список товарів RLD",
+        "знайти RLD"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'RLD%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "RLD",
+        "product_count": 1079
+      }
+    },
+    {
+      "id": "brand_rld_042_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling RLD products",
+      "question_uk": "Топ продажів RLD",
+      "variations_en": [
+        "best selling RLD",
+        "RLD sales ranking",
+        "most sold RLD products",
+        "top RLD sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі RLD",
+        "лідери продажів RLD",
+        "топ RLD",
+        "найпопулярніші RLD"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'RLD%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "RLD",
+        "product_count": 1079
+      }
+    },
+    {
+      "id": "brand_bsg_043_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with BSG code",
+      "question_uk": "Знайди товари з кодом BSG",
+      "variations_en": [
+        "BSG products",
+        "show BSG items",
+        "products with BSG",
+        "list BSG products",
+        "show all BSG products",
+        "all BSG items"
+      ],
+      "variations_uk": [
+        "товари BSG",
+        "покажи BSG",
+        "продукти з BSG",
+        "покажи всі товари BSG",
+        "всі товари BSG",
+        "список товарів BSG",
+        "знайти BSG"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'BSG%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "BSG",
+        "product_count": 1070
+      }
+    },
+    {
+      "id": "brand_bsg_043_top_sales",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top selling BSG products",
+      "question_uk": "Топ продажів BSG",
+      "variations_en": [
+        "best selling BSG",
+        "BSG sales ranking",
+        "most sold BSG products",
+        "top BSG sellers"
+      ],
+      "variations_uk": [
+        "найкращі продажі BSG",
+        "лідери продажів BSG",
+        "топ BSG",
+        "найпопулярніші BSG"
+      ],
+      "sql": "SELECT TOP 10 p.Name, p.VendorCode, SUM(oi.Qty) as TotalSold, COUNT(DISTINCT oi.OrderID) as OrderCount FROM dbo.Product p JOIN dbo.OrderItem oi ON oi.ProductID = p.ID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.VendorCode LIKE N'BSG%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalSold DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ],
+      "metadata": {
+        "brand": "BSG",
+        "product_count": 1070
+      }
+    },
+    {
+      "id": "brand_ks0_051_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with KS0 code",
+      "question_uk": "Знайди товари з кодом KS0",
+      "variations_en": [
+        "KS0 products",
+        "show KS0 items",
+        "products with KS0",
+        "list KS0 products",
+        "show all KS0 products",
+        "all KS0 items"
+      ],
+      "variations_uk": [
+        "товари KS0",
+        "покажи KS0",
+        "продукти з KS0",
+        "покажи всі товари KS0",
+        "всі товари KS0",
+        "список товарів KS0",
+        "знайти KS0"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'KS0%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "KS0",
+        "product_count": 989
+      }
+    },
+    {
+      "id": "brand_2.1_052_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with 2.1 code",
+      "question_uk": "Знайди товари з кодом 2.1",
+      "variations_en": [
+        "2.1 products",
+        "show 2.1 items",
+        "products with 2.1",
+        "list 2.1 products",
+        "show all 2.1 products",
+        "all 2.1 items"
+      ],
+      "variations_uk": [
+        "товари 2.1",
+        "покажи 2.1",
+        "продукти з 2.1",
+        "покажи всі товари 2.1",
+        "всі товари 2.1",
+        "список товарів 2.1",
+        "знайти 2.1"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'2.1%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "2.1",
+        "product_count": 960
+      }
+    },
+    {
+      "id": "brand_rk0_058_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with RK0 code",
+      "question_uk": "Знайди товари з кодом RK0",
+      "variations_en": [
+        "RK0 products",
+        "show RK0 items",
+        "products with RK0",
+        "list RK0 products",
+        "show all RK0 products",
+        "all RK0 items"
+      ],
+      "variations_uk": [
+        "товари RK0",
+        "покажи RK0",
+        "продукти з RK0",
+        "покажи всі товари RK0",
+        "всі товари RK0",
+        "список товарів RK0",
+        "знайти RK0"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'RK0%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "RK0",
+        "product_count": 781
+      }
+    },
+    {
+      "id": "brand_tt0_065_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with TT0 code",
+      "question_uk": "Знайди товари з кодом TT0",
+      "variations_en": [
+        "TT0 products",
+        "show TT0 items",
+        "products with TT0",
+        "list TT0 products",
+        "show all TT0 products",
+        "all TT0 items"
+      ],
+      "variations_uk": [
+        "товари TT0",
+        "покажи TT0",
+        "продукти з TT0",
+        "покажи всі товари TT0",
+        "всі товари TT0",
+        "список товарів TT0",
+        "знайти TT0"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'TT0%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "TT0",
+        "product_count": 668
+      }
+    },
+    {
+      "id": "brand_5.4_076_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with 5.4 code",
+      "question_uk": "Знайди товари з кодом 5.4",
+      "variations_en": [
+        "5.4 products",
+        "show 5.4 items",
+        "products with 5.4",
+        "list 5.4 products",
+        "show all 5.4 products",
+        "all 5.4 items"
+      ],
+      "variations_uk": [
+        "товари 5.4",
+        "покажи 5.4",
+        "продукти з 5.4",
+        "покажи всі товари 5.4",
+        "всі товари 5.4",
+        "список товарів 5.4",
+        "знайти 5.4"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'5.4%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "5.4",
+        "product_count": 578
+      }
+    },
+    {
+      "id": "brand_af4_082_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with AF4 code",
+      "question_uk": "Знайди товари з кодом AF4",
+      "variations_en": [
+        "AF4 products",
+        "show AF4 items",
+        "products with AF4",
+        "list AF4 products",
+        "show all AF4 products",
+        "all AF4 items"
+      ],
+      "variations_uk": [
+        "товари AF4",
+        "покажи AF4",
+        "продукти з AF4",
+        "покажи всі товари AF4",
+        "всі товари AF4",
+        "список товарів AF4",
+        "знайти AF4"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'AF4%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "AF4",
+        "product_count": 544
+      }
+    },
+    {
+      "id": "brand_fe7_083_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with FE7 code",
+      "question_uk": "Знайди товари з кодом FE7",
+      "variations_en": [
+        "FE7 products",
+        "show FE7 items",
+        "products with FE7",
+        "list FE7 products",
+        "show all FE7 products",
+        "all FE7 items"
+      ],
+      "variations_uk": [
+        "товари FE7",
+        "покажи FE7",
+        "продукти з FE7",
+        "покажи всі товари FE7",
+        "всі товари FE7",
+        "список товарів FE7",
+        "знайти FE7"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'FE7%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "FE7",
+        "product_count": 539
+      }
+    },
+    {
+      "id": "brand_f01_089_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with F01 code",
+      "question_uk": "Знайди товари з кодом F01",
+      "variations_en": [
+        "F01 products",
+        "show F01 items",
+        "products with F01",
+        "list F01 products",
+        "show all F01 products",
+        "all F01 items"
+      ],
+      "variations_uk": [
+        "товари F01",
+        "покажи F01",
+        "продукти з F01",
+        "покажи всі товари F01",
+        "всі товари F01",
+        "список товарів F01",
+        "знайти F01"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'F01%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "F01",
+        "product_count": 529
+      }
+    },
+    {
+      "id": "brand_af2_090_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with AF2 code",
+      "question_uk": "Знайди товари з кодом AF2",
+      "variations_en": [
+        "AF2 products",
+        "show AF2 items",
+        "products with AF2",
+        "list AF2 products",
+        "show all AF2 products",
+        "all AF2 items"
+      ],
+      "variations_uk": [
+        "товари AF2",
+        "покажи AF2",
+        "продукти з AF2",
+        "покажи всі товари AF2",
+        "всі товари AF2",
+        "список товарів AF2",
+        "знайти AF2"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'AF2%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "AF2",
+        "product_count": 527
+      }
+    },
+    {
+      "id": "brand_iss_091_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with ISS code",
+      "question_uk": "Знайди товари з кодом ISS",
+      "variations_en": [
+        "ISS products",
+        "show ISS items",
+        "products with ISS",
+        "list ISS products",
+        "show all ISS products",
+        "all ISS items"
+      ],
+      "variations_uk": [
+        "товари ISS",
+        "покажи ISS",
+        "продукти з ISS",
+        "покажи всі товари ISS",
+        "всі товари ISS",
+        "список товарів ISS",
+        "знайти ISS"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'ISS%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "ISS",
+        "product_count": 519
+      }
+    },
+    {
+      "id": "brand_hf6_096_search",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find products with HF6 code",
+      "question_uk": "Знайди товари з кодом HF6",
+      "variations_en": [
+        "HF6 products",
+        "show HF6 items",
+        "products with HF6",
+        "list HF6 products",
+        "show all HF6 products",
+        "all HF6 items"
+      ],
+      "variations_uk": [
+        "товари HF6",
+        "покажи HF6",
+        "продукти з HF6",
+        "покажи всі товари HF6",
+        "всі товари HF6",
+        "список товарів HF6",
+        "знайти HF6"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, VendorCode FROM dbo.Product WHERE Deleted = 0 AND VendorCode LIKE N'HF6%' ORDER BY VendorCode",
+      "tables_used": [
+        "Product"
+      ],
+      "metadata": {
+        "brand": "HF6",
+        "product_count": 502
+      }
+    }
+  ]
+}

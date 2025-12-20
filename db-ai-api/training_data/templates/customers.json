@@ -1,0 +1,974 @@
+{
+  "domain": "customers",
+  "description": "Customer and client query examples",
+  "tables": [
+    "Client",
+    "ClientAgreement",
+    "Sale",
+    "Order",
+    "Debt"
+  ],
+  "examples": [
+    {
+      "id": "client_total_001",
+      "category": "aggregation",
+      "complexity": "simple",
+      "question_en": "Total number of clients",
+      "question_uk": "Загальна кількість клієнтів",
+      "variations_en": [
+        "how many clients",
+        "client count",
+        "total customers"
+      ],
+      "variations_uk": [
+        "скільки клієнтів",
+        "кількість клієнтів",
+        "всього клієнтів"
+      ],
+      "sql": "SELECT COUNT(*) as TotalClients FROM dbo.Client WHERE Deleted = 0",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_active_002",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Active clients",
+      "question_uk": "Активні клієнти",
+      "variations_en": [
+        "clients with orders",
+        "buying customers"
+      ],
+      "variations_uk": [
+        "клієнти з замовленнями",
+        "активна база"
+      ],
+      "sql": "SELECT COUNT(DISTINCT c.ID) as ActiveClients FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID WHERE c.Deleted = 0 AND o.Deleted = 0 AND o.Created >= DATEADD(year, -1, GETDATE())",
+      "tables_used": [
+        "Client",
+        "Order",
+        "ClientAgreement"
+      ]
+    },
+    {
+      "id": "client_search_003",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find client by name",
+      "question_uk": "Знайти клієнта по імені",
+      "variations_en": [
+        "search client",
+        "lookup customer",
+        "find customer named"
+      ],
+      "variations_uk": [
+        "пошук клієнта",
+        "знайти покупця",
+        "клієнт з іменем"
+      ],
+      "sql": "SELECT TOP 20 ID, Name, Phone, Email FROM dbo.Client WHERE Deleted = 0 AND Name LIKE '%keyword%' ORDER BY Name",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_top_buyers_004",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top 10 clients by purchase amount",
+      "question_uk": "Топ 10 клієнтів за сумою покупок",
+      "variations_en": [
+        "best customers",
+        "biggest buyers",
+        "top spenders"
+      ],
+      "variations_uk": [
+        "найкращі клієнти",
+        "найбільші покупці",
+        "топ покупців"
+      ],
+      "sql": "SELECT TOP 10 c.ID, c.Name, SUM(oi.Qty * oi.PricePerItem) as TotalPurchases FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON o.ID = oi.OrderID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 GROUP BY c.ID, c.Name ORDER BY TotalPurchases DESC",
+      "tables_used": [
+        "Client",
+        "Order",
+        "OrderItem",
+        "ClientAgreement"
+      ]
+    },
+    {
+      "id": "client_top_orders_005",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Clients with most orders",
+      "question_uk": "Клієнти з найбільшою кількістю замовлень",
+      "variations_en": [
+        "frequent buyers",
+        "most orders by client"
+      ],
+      "variations_uk": [
+        "часті покупці",
+        "найбільше замовлень"
+      ],
+      "sql": "SELECT TOP 10 c.ID, c.Name, COUNT(o.ID) as OrderCount FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID WHERE c.Deleted = 0 AND o.Deleted = 0 GROUP BY c.ID, c.Name ORDER BY OrderCount DESC",
+      "tables_used": [
+        "Client",
+        "Order",
+        "ClientAgreement"
+      ]
+    },
+    {
+      "id": "client_recent_006",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "Recently added clients",
+      "question_uk": "Нещодавно додані клієнти",
+      "variations_en": [
+        "new clients",
+        "latest customers",
+        "recent registrations"
+      ],
+      "variations_uk": [
+        "нові клієнти",
+        "останні клієнти",
+        "свіжі реєстрації"
+      ],
+      "sql": "SELECT TOP 20 ID, Name, Phone, Email, Created FROM dbo.Client WHERE Deleted = 0 ORDER BY Created DESC",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_by_city_007",
+      "category": "filter",
+      "complexity": "medium",
+      "question_en": "Clients from Kyiv",
+      "question_uk": "Клієнти з Києва",
+      "variations_en": [
+        "Kyiv customers",
+        "customers in Kyiv"
+      ],
+      "variations_uk": [
+        "київські клієнти",
+        "покупці з Києва"
+      ],
+      "sql": "SELECT TOP 50 ID, Name, Phone, Address FROM dbo.Client WHERE Deleted = 0 AND (Address LIKE '%Київ%' OR Address LIKE '%Kyiv%' OR City LIKE '%Київ%')",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_by_region_008",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Clients count by region",
+      "question_uk": "Кількість клієнтів по регіонах",
+      "variations_en": [
+        "customers by oblast",
+        "regional breakdown"
+      ],
+      "variations_uk": [
+        "по областях",
+        "регіональний розподіл"
+      ],
+      "sql": "SELECT Region, COUNT(*) as ClientCount FROM dbo.Client WHERE Deleted = 0 AND Region IS NOT NULL GROUP BY Region ORDER BY ClientCount DESC",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_no_orders_009",
+      "category": "filter",
+      "complexity": "medium",
+      "question_en": "Clients without orders",
+      "question_uk": "Клієнти без замовлень",
+      "variations_en": [
+        "inactive clients",
+        "customers never ordered"
+      ],
+      "variations_uk": [
+        "неактивні клієнти",
+        "клієнти що не замовляли"
+      ],
+      "sql": "SELECT TOP 50 c.ID, c.Name, c.Phone, c.Created FROM dbo.Client c LEFT JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID AND o.Deleted = 0 WHERE c.Deleted = 0 AND o.ID IS NULL ORDER BY c.Created DESC",
+      "tables_used": [
+        "Client",
+        "Order",
+        "ClientAgreement"
+      ]
+    },
+    {
+      "id": "client_with_email_010",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Clients with email addresses",
+      "question_uk": "Клієнти з електронною поштою",
+      "variations_en": [
+        "customers with email",
+        "email list"
+      ],
+      "variations_uk": [
+        "клієнти з email",
+        "база email"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, Email, Phone FROM dbo.Client WHERE Deleted = 0 AND Email IS NOT NULL AND Email != '' ORDER BY Name",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_with_phone_011",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Clients with phone numbers",
+      "question_uk": "Клієнти з номерами телефонів",
+      "variations_en": [
+        "customers with phones",
+        "phone list"
+      ],
+      "variations_uk": [
+        "клієнти з телефонами",
+        "база телефонів"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, Phone, Email FROM dbo.Client WHERE Deleted = 0 AND Phone IS NOT NULL AND Phone != '' ORDER BY Name",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_today_012",
+      "category": "time_based",
+      "complexity": "simple",
+      "question_en": "Clients added today",
+      "question_uk": "Клієнти додані сьогодні",
+      "variations_en": [
+        "new clients today",
+        "today registrations"
+      ],
+      "variations_uk": [
+        "нові клієнти сьогодні",
+        "зареєстровані сьогодні"
+      ],
+      "sql": "SELECT ID, Name, Phone, Email, Created FROM dbo.Client WHERE Deleted = 0 AND CAST(Created AS DATE) = CAST(GETDATE() AS DATE) ORDER BY Created DESC",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_this_month_013",
+      "category": "time_based",
+      "complexity": "simple",
+      "question_en": "Clients added this month",
+      "question_uk": "Клієнти додані цього місяця",
+      "variations_en": [
+        "new clients this month",
+        "monthly registrations"
+      ],
+      "variations_uk": [
+        "нові клієнти за місяць",
+        "реєстрації за місяць"
+      ],
+      "sql": "SELECT COUNT(*) as NewClientsThisMonth FROM dbo.Client WHERE Deleted = 0 AND MONTH(Created) = MONTH(GETDATE()) AND YEAR(Created) = YEAR(GETDATE())",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_this_year_014",
+      "category": "time_based",
+      "complexity": "simple",
+      "question_en": "Clients added this year",
+      "question_uk": "Клієнти додані цього року",
+      "variations_en": [
+        "new clients 2024",
+        "yearly registrations"
+      ],
+      "variations_uk": [
+        "нові клієнти за рік",
+        "реєстрації за рік"
+      ],
+      "sql": "SELECT COUNT(*) as NewClientsThisYear FROM dbo.Client WHERE Deleted = 0 AND YEAR(Created) = YEAR(GETDATE())",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_growth_015",
+      "category": "comparison",
+      "complexity": "medium",
+      "question_en": "Client growth by month",
+      "question_uk": "Зростання клієнтської бази по місяцях",
+      "variations_en": [
+        "monthly client growth",
+        "new clients trend"
+      ],
+      "variations_uk": [
+        "динаміка клієнтів",
+        "приріст клієнтів"
+      ],
+      "sql": "SELECT YEAR(Created) as Year, MONTH(Created) as Month, COUNT(*) as NewClients FROM dbo.Client WHERE Deleted = 0 AND Created >= DATEADD(year, -1, GETDATE()) GROUP BY YEAR(Created), MONTH(Created) ORDER BY Year, Month",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_avg_order_016",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Average order value per client",
+      "question_uk": "Середня вартість замовлення на клієнта",
+      "variations_en": [
+        "avg order by customer",
+        "average spending"
+      ],
+      "variations_uk": [
+        "середній чек клієнта",
+        "середня сума покупки"
+      ],
+      "sql": "SELECT AVG(ClientTotal) as AvgOrderValuePerClient FROM (SELECT c.ID, SUM(oi.Qty * oi.PricePerItem) as ClientTotal FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON o.ID = oi.OrderID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 GROUP BY c.ID) as ClientTotals",
+      "tables_used": [
+        "Client",
+        "Order",
+        "OrderItem",
+        "ClientAgreement"
+      ]
+    },
+    {
+      "id": "client_orders_list_017",
+      "category": "listing",
+      "complexity": "medium",
+      "question_en": "Orders for specific client",
+      "question_uk": "Замовлення конкретного клієнта",
+      "variations_en": [
+        "client order history",
+        "customer purchases"
+      ],
+      "variations_uk": [
+        "історія замовлень клієнта",
+        "покупки клієнта"
+      ],
+      "sql": "SELECT TOP 20 o.ID, o.Created, COUNT(oi.ID) as ItemCount, SUM(oi.Qty * oi.PricePerItem) as OrderTotal FROM dbo.[Order] o JOIN dbo.OrderItem oi ON o.ID = oi.OrderID WHERE o.Deleted = 0 AND oi.Deleted = 0 AND o.ClientID = @ClientID GROUP BY o.ID, o.Created ORDER BY o.Created DESC",
+      "tables_used": [
+        "Order",
+        "OrderItem"
+      ]
+    },
+    {
+      "id": "client_last_order_018",
+      "category": "listing",
+      "complexity": "complex",
+      "question_en": "Clients with last order date",
+      "question_uk": "Клієнти з датою останнього замовлення",
+      "variations_en": [
+        "last purchase date",
+        "customer last activity"
+      ],
+      "variations_uk": [
+        "дата останньої покупки",
+        "остання активність"
+      ],
+      "sql": "SELECT TOP 50 c.ID, c.Name, MAX(o.Created) as LastOrderDate FROM dbo.Client c LEFT JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID AND o.Deleted = 0 WHERE c.Deleted = 0 GROUP BY c.ID, c.Name ORDER BY LastOrderDate DESC",
+      "tables_used": [
+        "Client",
+        "Order",
+        "ClientAgreement"
+      ]
+    },
+    {
+      "id": "client_dormant_019",
+      "category": "filter",
+      "complexity": "medium",
+      "question_en": "Clients inactive for 6 months",
+      "question_uk": "Клієнти неактивні 6 місяців",
+      "variations_en": [
+        "dormant customers",
+        "lost clients"
+      ],
+      "variations_uk": [
+        "сплячі клієнти",
+        "втрачені клієнти"
+      ],
+      "sql": "SELECT TOP 50 c.ID, c.Name, MAX(o.Created) as LastOrderDate FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID WHERE c.Deleted = 0 AND o.Deleted = 0 GROUP BY c.ID, c.Name HAVING MAX(o.Created) < DATEADD(month, -6, GETDATE()) ORDER BY LastOrderDate DESC",
+      "tables_used": [
+        "Client",
+        "Order",
+        "ClientAgreement"
+      ]
+    },
+    {
+      "id": "client_vip_020",
+      "category": "ranking",
+      "complexity": "complex",
+      "question_en": "VIP clients by total spending",
+      "question_uk": "VIP клієнти за загальною сумою витрат",
+      "variations_en": [
+        "premium customers",
+        "high value clients"
+      ],
+      "variations_uk": [
+        "преміум клієнти",
+        "цінні клієнти"
+      ],
+      "sql": "SELECT TOP 20 c.ID, c.Name, c.Phone, SUM(oi.Qty * oi.PricePerItem) as TotalSpent, COUNT(DISTINCT o.ID) as OrderCount FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON o.ID = oi.OrderID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 GROUP BY c.ID, c.Name, c.Phone ORDER BY TotalSpent DESC",
+      "tables_used": [
+        "Client",
+        "Order",
+        "OrderItem",
+        "ClientAgreement"
+      ]
+    },
+    {
+      "id": "client_by_source_021",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Clients by acquisition source",
+      "question_uk": "Клієнти по джерелах залучення",
+      "variations_en": [
+        "customer sources",
+        "where clients come from"
+      ],
+      "variations_uk": [
+        "джерела клієнтів",
+        "звідки клієнти"
+      ],
+      "sql": "SELECT Source, COUNT(*) as ClientCount FROM dbo.Client WHERE Deleted = 0 AND Source IS NOT NULL GROUP BY Source ORDER BY ClientCount DESC",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_agreements_022",
+      "category": "listing",
+      "complexity": "medium",
+      "question_en": "Client agreements",
+      "question_uk": "Договори клієнтів",
+      "variations_en": [
+        "customer contracts",
+        "client contracts"
+      ],
+      "variations_uk": [
+        "контракти клієнтів",
+        "угоди з клієнтами"
+      ],
+      "sql": "SELECT TOP 50 ca.ID, c.Name as ClientName, ca.AgreementNumber, ca.Created, ca.ValidUntil FROM dbo.ClientAgreement ca JOIN dbo.Client c ON ca.ClientID = c.ID WHERE ca.Deleted = 0 AND c.Deleted = 0 ORDER BY ca.Created DESC",
+      "tables_used": [
+        "ClientAgreement",
+        "Client"
+      ]
+    },
+    {
+      "id": "client_duplicate_023",
+      "category": "filter",
+      "complexity": "complex",
+      "question_en": "Duplicate clients by phone",
+      "question_uk": "Дублікати клієнтів по телефону",
+      "variations_en": [
+        "duplicate customers",
+        "same phone clients"
+      ],
+      "variations_uk": [
+        "повторні клієнти",
+        "клієнти з однаковим телефоном"
+      ],
+      "sql": "SELECT Phone, COUNT(*) as DuplicateCount FROM dbo.Client WHERE Deleted = 0 AND Phone IS NOT NULL AND Phone != '' GROUP BY Phone HAVING COUNT(*) > 1 ORDER BY DuplicateCount DESC",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_total_spent_024",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Total amount spent by all clients",
+      "question_uk": "Загальна сума витрат всіх клієнтів",
+      "variations_en": [
+        "total customer spending",
+        "all client purchases"
+      ],
+      "variations_uk": [
+        "загальні витрати клієнтів",
+        "всі покупки"
+      ],
+      "sql": "SELECT SUM(oi.Qty * oi.PricePerItem) as TotalClientSpending FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON o.ID = oi.OrderID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0",
+      "tables_used": [
+        "Client",
+        "Order",
+        "OrderItem",
+        "ClientAgreement"
+      ]
+    },
+    {
+      "id": "client_search_phone_025",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find client by phone number",
+      "question_uk": "Знайти клієнта по номеру телефону",
+      "variations_en": [
+        "search by phone",
+        "lookup phone"
+      ],
+      "variations_uk": [
+        "пошук по телефону",
+        "знайти по номеру"
+      ],
+      "sql": "SELECT ID, Name, Phone, Email, Address FROM dbo.Client WHERE Deleted = 0 AND Phone LIKE '%keyword%'",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_corporate_026",
+      "category": "filter",
+      "complexity": "medium",
+      "question_en": "Corporate clients",
+      "question_uk": "Корпоративні клієнти",
+      "variations_en": [
+        "business customers",
+        "company clients"
+      ],
+      "variations_uk": [
+        "бізнес клієнти",
+        "юридичні особи"
+      ],
+      "sql": "SELECT TOP 50 ID, Name, Phone, Email, EDRPOU FROM dbo.Client WHERE Deleted = 0 AND EDRPOU IS NOT NULL AND EDRPOU != '' ORDER BY Name",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_individual_027",
+      "category": "filter",
+      "complexity": "medium",
+      "question_en": "Individual clients",
+      "question_uk": "Фізичні особи",
+      "variations_en": [
+        "private customers",
+        "personal accounts"
+      ],
+      "variations_uk": [
+        "приватні клієнти",
+        "фізичні клієнти"
+      ],
+      "sql": "SELECT TOP 50 ID, Name, Phone, Email FROM dbo.Client WHERE Deleted = 0 AND (EDRPOU IS NULL OR EDRPOU = '') ORDER BY Name",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_with_debts_028",
+      "category": "filter",
+      "complexity": "complex",
+      "question_en": "Clients with outstanding debts",
+      "question_uk": "Клієнти з непогашеними боргами",
+      "variations_en": [
+        "customers in debt",
+        "unpaid balances"
+      ],
+      "variations_uk": [
+        "клієнти боржники",
+        "непогашені борги"
+      ],
+      "sql": "SELECT TOP 50 c.ID, c.Name, c.Phone, SUM(d.Amount) as TotalDebt FROM dbo.Client c JOIN dbo.Debt d ON c.ID = d.ClientID WHERE c.Deleted = 0 AND d.Deleted = 0 AND d.IsPaid = 0 GROUP BY c.ID, c.Name, c.Phone HAVING SUM(d.Amount) > 0 ORDER BY TotalDebt DESC",
+      "tables_used": [
+        "Client",
+        "Debt"
+      ]
+    },
+    {
+      "id": "client_retention_029",
+      "category": "comparison",
+      "complexity": "complex",
+      "question_en": "Client retention rate",
+      "question_uk": "Показник утримання клієнтів",
+      "variations_en": [
+        "returning customers",
+        "repeat buyers"
+      ],
+      "variations_uk": [
+        "повторні покупці",
+        "клієнти що повертаються"
+      ],
+      "sql": "SELECT COUNT(DISTINCT CASE WHEN OrderCount > 1 THEN ClientID END) * 100.0 / COUNT(DISTINCT ClientID) as RetentionRate FROM (SELECT o.ClientID, COUNT(*) as OrderCount FROM dbo.[Order] o WHERE o.Deleted = 0 GROUP BY o.ClientID) as ClientOrders",
+      "tables_used": [
+        "Order"
+      ]
+    },
+    {
+      "id": "client_list_all_030",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "List all clients",
+      "question_uk": "Список всіх клієнтів",
+      "variations_en": [
+        "all customers",
+        "client directory"
+      ],
+      "variations_uk": [
+        "всі клієнти",
+        "довідник клієнтів"
+      ],
+      "sql": "SELECT TOP 100 ID, Name, Phone, Email, Address, Created FROM dbo.Client WHERE Deleted = 0 ORDER BY Name",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_region_khmelnytskyi",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Clients from Khmelnytskyi region",
+      "question_uk": "Клієнти з Хмельницького",
+      "variations_en": [
+        "customers from Khmelnytskyi",
+        "Khmelnytskyi clients"
+      ],
+      "variations_uk": [
+        "клієнт із хмельницького",
+        "хмельницькі клієнти",
+        "покупці з хмельниччини"
+      ],
+      "sql": "SELECT TOP 20 c.ID, c.Name, c.LegalAddress, c.MobileNumber FROM dbo.Client c WHERE c.Deleted = 0 AND (c.LegalAddress LIKE N'%Хмельниц%' OR c.ActualAddress LIKE N'%Хмельниц%') ORDER BY c.Name",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_orders_correct_join",
+      "category": "ranking",
+      "complexity": "complex",
+      "question_en": "Top clients by number of orders",
+      "question_uk": "Топ клієнтів за кількістю замовлень",
+      "variations_en": [
+        "best customers by orders",
+        "most orders"
+      ],
+      "variations_uk": [
+        "найактивніші клієнти",
+        "клієнти з найбільше замовлень"
+      ],
+      "sql": "SELECT TOP 10 c.Name, COUNT(DISTINCT o.ID) as OrderCount FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID WHERE c.Deleted = 0 AND o.Deleted = 0 GROUP BY c.ID, c.Name ORDER BY OrderCount DESC",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order"
+      ]
+    },
+    {
+      "id": "client_products_purchased",
+      "category": "listing",
+      "complexity": "complex",
+      "question_en": "Products purchased by client",
+      "question_uk": "Товари що купляв клієнт",
+      "variations_en": [
+        "what did client buy",
+        "client purchase history"
+      ],
+      "variations_uk": [
+        "що купляв клієнт",
+        "історія покупок клієнта",
+        "товари клієнта"
+      ],
+      "sql": "SELECT DISTINCT p.Name, p.VendorCode, SUM(oi.Qty) as TotalQty FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID JOIN dbo.Product p ON p.ID = oi.ProductID WHERE c.Deleted = 0 AND c.Name LIKE N'%keyword%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalQty DESC",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order",
+        "OrderItem",
+        "Product"
+      ]
+    },
+    {
+      "id": "client_total_purchases",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Client total purchase amount",
+      "question_uk": "Загальна сума покупок клієнта",
+      "variations_en": [
+        "how much did client spend",
+        "client spending"
+      ],
+      "variations_uk": [
+        "скільки витратив клієнт",
+        "обсяг покупок клієнта"
+      ],
+      "sql": "SELECT c.Name, SUM(oi.Qty * oi.PricePerItem) as TotalAmount FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 AND c.Name LIKE N'%keyword%' GROUP BY c.ID, c.Name",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order",
+        "OrderItem"
+      ]
+    },
+    {
+      "id": "client_region_generic",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Clients from specific region",
+      "question_uk": "Клієнти з області",
+      "variations_en": [
+        "customers by region",
+        "regional clients"
+      ],
+      "variations_uk": [
+        "клієнти з регіону",
+        "регіональні клієнти"
+      ],
+      "sql": "SELECT TOP 30 c.ID, c.Name, c.LegalAddress FROM dbo.Client c WHERE c.Deleted = 0 AND (c.LegalAddress LIKE N'%keyword%' OR c.ActualAddress LIKE N'%keyword%' OR c.DeliveryAddress LIKE N'%keyword%') ORDER BY c.Name",
+      "tables_used": [
+        "Client"
+      ]
+    },
+    {
+      "id": "client_orders_join_critical_001",
+      "category": "join_pattern",
+      "complexity": "critical",
+      "question_en": "Get orders for a client",
+      "question_uk": "Отримати замовлення клієнта",
+      "variations_en": [
+        "client orders",
+        "orders by client",
+        "show client orders",
+        "orders for customer"
+      ],
+      "variations_uk": [
+        "замовлення клієнта",
+        "замовлення по клієнту",
+        "покажи замовлення клієнта",
+        "які замовлення у клієнта"
+      ],
+      "sql": "SELECT o.ID, o.Created, c.Name as ClientName FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID WHERE c.Deleted = 0 AND ca.Deleted = 0 AND o.Deleted = 0 ORDER BY o.Created DESC",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order"
+      ],
+      "critical_note": "NEVER use Order.ClientID - it does not exist! Use ClientAgreement as bridge."
+    },
+    {
+      "id": "client_orders_total_002",
+      "category": "join_pattern",
+      "complexity": "critical",
+      "question_en": "Total orders amount for client",
+      "question_uk": "Загальна сума замовлень клієнта",
+      "variations_en": [
+        "client order total",
+        "how much client ordered",
+        "total order value for customer"
+      ],
+      "variations_uk": [
+        "сума замовлень клієнта",
+        "на скільки замовив клієнт",
+        "загальна вартість замовлень"
+      ],
+      "sql": "SELECT c.Name, SUM(oi.Qty * oi.PricePerItem) as TotalAmount FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 GROUP BY c.ID, c.Name",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order",
+        "OrderItem"
+      ],
+      "critical_note": "Path: Client -> ClientAgreement -> Order -> OrderItem"
+    },
+    {
+      "id": "order_with_client_info_003",
+      "category": "join_pattern",
+      "complexity": "critical",
+      "question_en": "Orders with client information",
+      "question_uk": "Замовлення з інформацією про клієнта",
+      "variations_en": [
+        "order details with client",
+        "show order and client",
+        "orders including customer name"
+      ],
+      "variations_uk": [
+        "замовлення з даними клієнта",
+        "замовлення і клієнт",
+        "замовлення з іменем клієнта"
+      ],
+      "sql": "SELECT TOP 50 o.ID, o.Created, c.Name as ClientName, c.Phone FROM dbo.[Order] o JOIN dbo.ClientAgreement ca ON o.ClientAgreementID = ca.ID JOIN dbo.Client c ON ca.ClientID = c.ID WHERE o.Deleted = 0 AND c.Deleted = 0 ORDER BY o.Created DESC",
+      "tables_used": [
+        "Order",
+        "ClientAgreement",
+        "Client"
+      ],
+      "critical_note": "From Order: first join ClientAgreement, then join Client"
+    },
+    {
+      "id": "client_order_count_004",
+      "category": "join_pattern",
+      "complexity": "critical",
+      "question_en": "Number of orders per client",
+      "question_uk": "Кількість замовлень по клієнтах",
+      "variations_en": [
+        "order count by client",
+        "how many orders each client",
+        "clients order frequency"
+      ],
+      "variations_uk": [
+        "скільки замовлень у клієнта",
+        "кількість замовлень клієнтів",
+        "частота замовлень"
+      ],
+      "sql": "SELECT c.ID, c.Name, COUNT(o.ID) as OrderCount FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID WHERE c.Deleted = 0 AND o.Deleted = 0 GROUP BY c.ID, c.Name ORDER BY OrderCount DESC",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order"
+      ],
+      "critical_note": "Client -> ClientAgreement -> Order for counting orders"
+    },
+    {
+      "id": "recent_client_orders_005",
+      "category": "join_pattern",
+      "complexity": "critical",
+      "question_en": "Recent orders for specific client",
+      "question_uk": "Останні замовлення конкретного клієнта",
+      "variations_en": [
+        "last orders for client",
+        "client recent purchases",
+        "latest client orders"
+      ],
+      "variations_uk": [
+        "останні замовлення клієнта",
+        "нещодавні покупки клієнта",
+        "нові замовлення клієнта"
+      ],
+      "sql": "SELECT TOP 10 o.ID, o.Created, SUM(oi.Qty * oi.PricePerItem) as OrderTotal FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 AND c.Name LIKE N'%keyword%' GROUP BY o.ID, o.Created ORDER BY o.Created DESC",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order",
+        "OrderItem"
+      ],
+      "critical_note": "Always use ClientAgreement between Client and Order"
+    },
+    {
+      "id": "client_products_ordered_006",
+      "category": "join_pattern",
+      "complexity": "critical",
+      "question_en": "Products ordered by client",
+      "question_uk": "Товари які замовляв клієнт",
+      "variations_en": [
+        "what client bought",
+        "client product history",
+        "products purchased by customer"
+      ],
+      "variations_uk": [
+        "що купував клієнт",
+        "історія покупок клієнта",
+        "товари клієнта"
+      ],
+      "sql": "SELECT p.Name as ProductName, p.VendorCode, SUM(oi.Qty) as TotalQty FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID JOIN dbo.Product p ON oi.ProductID = p.ID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 AND p.Deleted = 0 AND c.Name LIKE N'%keyword%' GROUP BY p.ID, p.Name, p.VendorCode ORDER BY TotalQty DESC",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order",
+        "OrderItem",
+        "Product"
+      ],
+      "critical_note": "Full path: Client -> ClientAgreement -> Order -> OrderItem -> Product"
+    },
+    {
+      "id": "client_bought_brand_007",
+      "category": "join_pattern",
+      "complexity": "critical",
+      "question_en": "Clients who bought SEM products",
+      "question_uk": "Клієнти які купували товари SEM",
+      "variations_en": [
+        "customers who purchased SEM",
+        "who bought SEM products",
+        "SEM product buyers",
+        "clients buying SEM"
+      ],
+      "variations_uk": [
+        "хто купляв SEM",
+        "покупці SEM",
+        "клієнти що купували SEM",
+        "замовники SEM товарів"
+      ],
+      "sql": "SELECT DISTINCT c.ID, c.Name FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID JOIN dbo.Product p ON oi.ProductID = p.ID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 AND p.Deleted = 0 AND p.VendorCode LIKE N'SEM%' ORDER BY c.Name",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order",
+        "OrderItem",
+        "Product"
+      ],
+      "critical_note": "Brand filter: p.VendorCode LIKE N'SEM%'. Path: Client -> ClientAgreement -> Order -> OrderItem -> Product"
+    },
+    {
+      "id": "client_orders_month_008",
+      "category": "join_pattern",
+      "complexity": "critical",
+      "question_en": "Clients who ordered in October 2024",
+      "question_uk": "Клієнти які замовляли в жовтні 2024",
+      "variations_en": [
+        "customers with orders in October",
+        "who ordered in October 2024",
+        "October 2024 clients"
+      ],
+      "variations_uk": [
+        "клієнти за жовтень 2024",
+        "хто замовляв у жовтні",
+        "замовлення жовтня 2024"
+      ],
+      "sql": "SELECT DISTINCT c.ID, c.Name FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID WHERE c.Deleted = 0 AND o.Deleted = 0 AND MONTH(o.Created) = 10 AND YEAR(o.Created) = 2024 ORDER BY c.Name",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order"
+      ],
+      "critical_note": "Date filter on Order.Created. Path: Client -> ClientAgreement -> Order"
+    },
+    {
+      "id": "client_brand_month_009",
+      "category": "join_pattern",
+      "complexity": "critical",
+      "question_en": "Clients who bought SEM products in October 2024",
+      "question_uk": "Клієнти які купували товари SEM в жовтні 2024 року",
+      "variations_en": [
+        "SEM buyers in October 2024",
+        "customers who bought SEM in October",
+        "October 2024 SEM purchases"
+      ],
+      "variations_uk": [
+        "покупці SEM в жовтні 2024",
+        "хто купляв SEM у жовтні",
+        "клієнти SEM за жовтень"
+      ],
+      "sql": "SELECT DISTINCT c.ID, c.Name FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID JOIN dbo.Product p ON oi.ProductID = p.ID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 AND p.Deleted = 0 AND p.VendorCode LIKE N'SEM%' AND MONTH(o.Created) = 10 AND YEAR(o.Created) = 2024 ORDER BY c.Name",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order",
+        "OrderItem",
+        "Product"
+      ],
+      "critical_note": "Combined brand and date filter. Path: Client -> ClientAgreement -> Order -> OrderItem -> Product"
+    },
+    {
+      "id": "client_bought_mg_010",
+      "category": "join_pattern",
+      "complexity": "critical",
+      "question_en": "Clients who bought MG products",
+      "question_uk": "Клієнти які купували товари MG",
+      "variations_en": [
+        "customers who purchased MG",
+        "MG product buyers"
+      ],
+      "variations_uk": [
+        "хто купляв MG",
+        "покупці MG"
+      ],
+      "sql": "SELECT DISTINCT c.ID, c.Name FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID JOIN dbo.Product p ON oi.ProductID = p.ID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 AND p.Deleted = 0 AND p.VendorCode LIKE N'MG%' ORDER BY c.Name",
+      "tables_used": [
+        "Client",
+        "ClientAgreement",
+        "Order",
+        "OrderItem",
+        "Product"
+      ],
+      "critical_note": "Brand filter: p.VendorCode LIKE N'MG%'"
+    }
+  ]
+}

@@ -1,0 +1,740 @@
+{
+  "domain": "financial",
+  "description": "Financial, debt, and payment query examples",
+  "tables": [
+    "Debt",
+    "Payment",
+    "Client",
+    "Sale",
+    "OrderItem",
+    "ClientBalanceMovement"
+  ],
+  "examples": [
+    {
+      "id": "debt_total_001",
+      "category": "aggregation",
+      "complexity": "simple",
+      "question_en": "Total outstanding debt",
+      "question_uk": "Загальна сума боргів",
+      "variations_en": [
+        "all debts",
+        "total unpaid",
+        "how much owed"
+      ],
+      "variations_uk": [
+        "всі борги",
+        "загальна заборгованість",
+        "скільки винні"
+      ],
+      "sql": "SELECT SUM(Amount) as TotalDebt FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 0",
+      "tables_used": [
+        "Debt"
+      ]
+    },
+    {
+      "id": "debt_count_002",
+      "category": "aggregation",
+      "complexity": "simple",
+      "question_en": "Number of unpaid debts",
+      "question_uk": "Кількість непогашених боргів",
+      "variations_en": [
+        "debt count",
+        "how many debts",
+        "unpaid invoices count"
+      ],
+      "variations_uk": [
+        "скільки боргів",
+        "кількість заборгованостей",
+        "непогашені рахунки"
+      ],
+      "sql": "SELECT COUNT(*) as DebtCount FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 0",
+      "tables_used": [
+        "Debt"
+      ]
+    },
+    {
+      "id": "debt_by_client_003",
+      "category": "listing",
+      "complexity": "medium",
+      "question_en": "Debts by client",
+      "question_uk": "Борги по клієнтах",
+      "variations_en": [
+        "client debts list",
+        "who owes money"
+      ],
+      "variations_uk": [
+        "заборгованість клієнтів",
+        "хто винен гроші"
+      ],
+      "sql": "SELECT TOP 50 c.ID, c.Name, SUM(d.Amount) as TotalDebt, COUNT(d.ID) as DebtCount FROM dbo.Client c JOIN dbo.Debt d ON c.ID = d.ClientID WHERE c.Deleted = 0 AND d.Deleted = 0 AND d.IsPaid = 0 GROUP BY c.ID, c.Name ORDER BY TotalDebt DESC",
+      "tables_used": [
+        "Client",
+        "Debt"
+      ]
+    },
+    {
+      "id": "debt_top_debtors_004",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top 10 debtors",
+      "question_uk": "Топ 10 боржників",
+      "variations_en": [
+        "biggest debtors",
+        "largest debts by client"
+      ],
+      "variations_uk": [
+        "найбільші боржники",
+        "хто найбільше винен"
+      ],
+      "sql": "SELECT TOP 10 c.ID, c.Name, c.Phone, SUM(d.Amount) as TotalDebt FROM dbo.Client c JOIN dbo.Debt d ON c.ID = d.ClientID WHERE c.Deleted = 0 AND d.Deleted = 0 AND d.IsPaid = 0 GROUP BY c.ID, c.Name, c.Phone ORDER BY TotalDebt DESC",
+      "tables_used": [
+        "Client",
+        "Debt"
+      ]
+    },
+    {
+      "id": "debt_overdue_005",
+      "category": "filter",
+      "complexity": "medium",
+      "question_en": "Overdue debts",
+      "question_uk": "Прострочені борги",
+      "variations_en": [
+        "past due debts",
+        "late payments"
+      ],
+      "variations_uk": [
+        "прострочена заборгованість",
+        "несвоєчасні платежі"
+      ],
+      "sql": "SELECT TOP 50 d.ID, c.Name, d.Amount, d.DueDate, DATEDIFF(day, d.DueDate, GETDATE()) as DaysOverdue FROM dbo.Debt d JOIN dbo.Client c ON d.ClientID = c.ID WHERE d.Deleted = 0 AND c.Deleted = 0 AND d.IsPaid = 0 AND d.DueDate < GETDATE() ORDER BY DaysOverdue DESC",
+      "tables_used": [
+        "Debt",
+        "Client"
+      ]
+    },
+    {
+      "id": "debt_recent_006",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "Recent debts",
+      "question_uk": "Останні борги",
+      "variations_en": [
+        "new debts",
+        "latest debts"
+      ],
+      "variations_uk": [
+        "нові борги",
+        "свіжі заборгованості"
+      ],
+      "sql": "SELECT TOP 20 d.ID, c.Name, d.Amount, d.Created, d.DueDate FROM dbo.Debt d JOIN dbo.Client c ON d.ClientID = c.ID WHERE d.Deleted = 0 AND c.Deleted = 0 ORDER BY d.Created DESC",
+      "tables_used": [
+        "Debt",
+        "Client"
+      ]
+    },
+    {
+      "id": "payment_total_007",
+      "category": "aggregation",
+      "complexity": "simple",
+      "question_en": "Total payments received",
+      "question_uk": "Загальна сума платежів",
+      "variations_en": [
+        "all payments",
+        "total received"
+      ],
+      "variations_uk": [
+        "всі платежі",
+        "скільки отримано"
+      ],
+      "sql": "SELECT SUM(Amount) as TotalPayments FROM dbo.Payment WHERE Deleted = 0",
+      "tables_used": [
+        "Payment"
+      ]
+    },
+    {
+      "id": "payment_today_008",
+      "category": "time_based",
+      "complexity": "simple",
+      "question_en": "Payments today",
+      "question_uk": "Платежі сьогодні",
+      "variations_en": [
+        "today's payments",
+        "received today"
+      ],
+      "variations_uk": [
+        "сьогоднішні платежі",
+        "отримано сьогодні"
+      ],
+      "sql": "SELECT SUM(Amount) as TodayPayments, COUNT(*) as PaymentCount FROM dbo.Payment WHERE Deleted = 0 AND CAST(Created AS DATE) = CAST(GETDATE() AS DATE)",
+      "tables_used": [
+        "Payment"
+      ]
+    },
+    {
+      "id": "payment_this_month_009",
+      "category": "time_based",
+      "complexity": "simple",
+      "question_en": "Payments this month",
+      "question_uk": "Платежі за цей місяць",
+      "variations_en": [
+        "monthly payments",
+        "this month received"
+      ],
+      "variations_uk": [
+        "місячні платежі",
+        "за місяць отримано"
+      ],
+      "sql": "SELECT SUM(Amount) as MonthlyPayments, COUNT(*) as PaymentCount FROM dbo.Payment WHERE Deleted = 0 AND MONTH(Created) = MONTH(GETDATE()) AND YEAR(Created) = YEAR(GETDATE())",
+      "tables_used": [
+        "Payment"
+      ]
+    },
+    {
+      "id": "payment_by_month_010",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Payments by month",
+      "question_uk": "Платежі по місяцях",
+      "variations_en": [
+        "monthly breakdown",
+        "payment trend"
+      ],
+      "variations_uk": [
+        "помісячно",
+        "динаміка платежів"
+      ],
+      "sql": "SELECT YEAR(Created) as Year, MONTH(Created) as Month, SUM(Amount) as TotalPayments, COUNT(*) as PaymentCount FROM dbo.Payment WHERE Deleted = 0 AND Created >= DATEADD(year, -1, GETDATE()) GROUP BY YEAR(Created), MONTH(Created) ORDER BY Year, Month",
+      "tables_used": [
+        "Payment"
+      ]
+    },
+    {
+      "id": "revenue_total_011",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Total revenue",
+      "question_uk": "Загальна виручка",
+      "variations_en": [
+        "total sales revenue",
+        "all time revenue"
+      ],
+      "variations_uk": [
+        "загальний дохід",
+        "вся виручка"
+      ],
+      "sql": "SELECT SUM(oi.Qty * oi.PricePerItem) as TotalRevenue FROM dbo.OrderItem oi WHERE oi.Deleted = 0",
+      "tables_used": [
+        "OrderItem"
+      ]
+    },
+    {
+      "id": "revenue_this_year_012",
+      "category": "time_based",
+      "complexity": "medium",
+      "question_en": "Revenue this year",
+      "question_uk": "Виручка за цей рік",
+      "variations_en": [
+        "2024 revenue",
+        "yearly revenue"
+      ],
+      "variations_uk": [
+        "дохід за рік",
+        "річна виручка"
+      ],
+      "sql": "SELECT SUM(oi.Qty * oi.PricePerItem) as YearlyRevenue FROM dbo.OrderItem oi WHERE oi.Deleted = 0 AND YEAR(oi.Created) = YEAR(GETDATE())",
+      "tables_used": [
+        "OrderItem"
+      ]
+    },
+    {
+      "id": "revenue_by_month_013",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Revenue by month",
+      "question_uk": "Виручка по місяцях",
+      "variations_en": [
+        "monthly revenue",
+        "revenue trend"
+      ],
+      "variations_uk": [
+        "помісячна виручка",
+        "динаміка доходу"
+      ],
+      "sql": "SELECT YEAR(oi.Created) as Year, MONTH(oi.Created) as Month, SUM(oi.Qty * oi.PricePerItem) as Revenue FROM dbo.OrderItem oi WHERE oi.Deleted = 0 AND oi.Created >= DATEADD(year, -1, GETDATE()) GROUP BY YEAR(oi.Created), MONTH(oi.Created) ORDER BY Year, Month",
+      "tables_used": [
+        "OrderItem"
+      ]
+    },
+    {
+      "id": "revenue_by_quarter_014",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Revenue by quarter",
+      "question_uk": "Виручка по кварталах",
+      "variations_en": [
+        "quarterly revenue",
+        "Q1 Q2 Q3 Q4 breakdown"
+      ],
+      "variations_uk": [
+        "квартальна виручка",
+        "по кварталах"
+      ],
+      "sql": "SELECT YEAR(oi.Created) as Year, DATEPART(quarter, oi.Created) as Quarter, SUM(oi.Qty * oi.PricePerItem) as Revenue FROM dbo.OrderItem oi WHERE oi.Deleted = 0 AND oi.Created >= DATEADD(year, -2, GETDATE()) GROUP BY YEAR(oi.Created), DATEPART(quarter, oi.Created) ORDER BY Year, Quarter",
+      "tables_used": [
+        "OrderItem"
+      ]
+    },
+    {
+      "id": "debt_paid_015",
+      "category": "aggregation",
+      "complexity": "simple",
+      "question_en": "Total paid debts",
+      "question_uk": "Загальна сума погашених боргів",
+      "variations_en": [
+        "paid off debts",
+        "cleared debts"
+      ],
+      "variations_uk": [
+        "погашені борги",
+        "закриті борги"
+      ],
+      "sql": "SELECT SUM(Amount) as PaidDebts FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 1",
+      "tables_used": [
+        "Debt"
+      ]
+    },
+    {
+      "id": "debt_aging_016",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Debt aging report",
+      "question_uk": "Звіт про старіння боргів",
+      "variations_en": [
+        "debt age breakdown",
+        "how old are debts"
+      ],
+      "variations_uk": [
+        "вік боргів",
+        "як давно борги"
+      ],
+      "sql": "SELECT CASE WHEN DATEDIFF(day, Created, GETDATE()) <= 30 THEN '0-30 days' WHEN DATEDIFF(day, Created, GETDATE()) <= 60 THEN '31-60 days' WHEN DATEDIFF(day, Created, GETDATE()) <= 90 THEN '61-90 days' ELSE '90+ days' END as AgeBucket, COUNT(*) as DebtCount, SUM(Amount) as TotalAmount FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 0 GROUP BY CASE WHEN DATEDIFF(day, Created, GETDATE()) <= 30 THEN '0-30 days' WHEN DATEDIFF(day, Created, GETDATE()) <= 60 THEN '31-60 days' WHEN DATEDIFF(day, Created, GETDATE()) <= 90 THEN '61-90 days' ELSE '90+ days' END",
+      "tables_used": [
+        "Debt"
+      ]
+    },
+    {
+      "id": "payment_recent_017",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "Recent payments",
+      "question_uk": "Останні платежі",
+      "variations_en": [
+        "latest payments",
+        "new payments"
+      ],
+      "variations_uk": [
+        "нові платежі",
+        "свіжі платежі"
+      ],
+      "sql": "SELECT TOP 20 p.ID, c.Name, p.Amount, p.Created, p.PaymentType FROM dbo.Payment p JOIN dbo.Client c ON p.ClientID = c.ID WHERE p.Deleted = 0 AND c.Deleted = 0 ORDER BY p.Created DESC",
+      "tables_used": [
+        "Payment",
+        "Client"
+      ]
+    },
+    {
+      "id": "payment_by_client_018",
+      "category": "listing",
+      "complexity": "medium",
+      "question_en": "Payments by client",
+      "question_uk": "Платежі по клієнтах",
+      "variations_en": [
+        "client payment history",
+        "who paid"
+      ],
+      "variations_uk": [
+        "історія платежів клієнта",
+        "хто платив"
+      ],
+      "sql": "SELECT TOP 50 c.ID, c.Name, SUM(p.Amount) as TotalPaid, COUNT(p.ID) as PaymentCount FROM dbo.Client c JOIN dbo.Payment p ON c.ID = p.ClientID WHERE c.Deleted = 0 AND p.Deleted = 0 GROUP BY c.ID, c.Name ORDER BY TotalPaid DESC",
+      "tables_used": [
+        "Client",
+        "Payment"
+      ]
+    },
+    {
+      "id": "balance_by_client_019",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Client balance (debt minus payments)",
+      "question_uk": "Баланс клієнта (борг мінус платежі)",
+      "variations_en": [
+        "net balance",
+        "amount owed"
+      ],
+      "variations_uk": [
+        "чистий баланс",
+        "залишок боргу"
+      ],
+      "sql": "SELECT c.ID, c.Name, ISNULL(d.TotalDebt, 0) as TotalDebt, ISNULL(p.TotalPaid, 0) as TotalPaid, ISNULL(d.TotalDebt, 0) - ISNULL(p.TotalPaid, 0) as Balance FROM dbo.Client c LEFT JOIN (SELECT ClientID, SUM(Amount) as TotalDebt FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 0 GROUP BY ClientID) d ON c.ID = d.ClientID LEFT JOIN (SELECT ClientID, SUM(Amount) as TotalPaid FROM dbo.Payment WHERE Deleted = 0 GROUP BY ClientID) p ON c.ID = p.ClientID WHERE c.Deleted = 0 AND (d.TotalDebt > 0 OR p.TotalPaid > 0) ORDER BY Balance DESC",
+      "tables_used": [
+        "Client",
+        "Debt",
+        "Payment"
+      ]
+    },
+    {
+      "id": "revenue_compare_years_020",
+      "category": "comparison",
+      "complexity": "medium",
+      "question_en": "Compare revenue 2023 vs 2024",
+      "question_uk": "Порівняй виручку 2023 та 2024",
+      "variations_en": [
+        "year over year revenue",
+        "revenue comparison"
+      ],
+      "variations_uk": [
+        "виручка рік до року",
+        "порівняння років"
+      ],
+      "sql": "SELECT YEAR(oi.Created) as Year, SUM(oi.Qty * oi.PricePerItem) as Revenue FROM dbo.OrderItem oi WHERE oi.Deleted = 0 AND YEAR(oi.Created) IN (2023, 2024) GROUP BY YEAR(oi.Created) ORDER BY Year",
+      "tables_used": [
+        "OrderItem"
+      ]
+    },
+    {
+      "id": "avg_order_value_021",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Average order value",
+      "question_uk": "Середній чек",
+      "variations_en": [
+        "avg order amount",
+        "average sale"
+      ],
+      "variations_uk": [
+        "середня сума замовлення",
+        "середній чек замовлення"
+      ],
+      "sql": "SELECT AVG(OrderTotal) as AvgOrderValue FROM (SELECT oi.OrderID, SUM(oi.Qty * oi.PricePerItem) as OrderTotal FROM dbo.OrderItem oi WHERE oi.Deleted = 0 GROUP BY oi.OrderID) as OrderTotals",
+      "tables_used": [
+        "OrderItem"
+      ]
+    },
+    {
+      "id": "debt_this_month_022",
+      "category": "time_based",
+      "complexity": "simple",
+      "question_en": "Debts created this month",
+      "question_uk": "Борги за цей місяць",
+      "variations_en": [
+        "new debts this month",
+        "monthly new debt"
+      ],
+      "variations_uk": [
+        "нові борги за місяць",
+        "місячні нові борги"
+      ],
+      "sql": "SELECT SUM(Amount) as NewDebt, COUNT(*) as DebtCount FROM dbo.Debt WHERE Deleted = 0 AND MONTH(Created) = MONTH(GETDATE()) AND YEAR(Created) = YEAR(GETDATE())",
+      "tables_used": [
+        "Debt"
+      ]
+    },
+    {
+      "id": "profit_margin_023",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Profit margin by product",
+      "question_uk": "Маржа прибутку по товарах",
+      "variations_en": [
+        "product profitability",
+        "margin analysis"
+      ],
+      "variations_uk": [
+        "прибутковість товарів",
+        "аналіз маржі"
+      ],
+      "sql": "SELECT TOP 20 p.Name, SUM(oi.Qty * oi.PricePerItem) as Revenue, SUM(oi.Qty * p.CostPrice) as Cost, SUM(oi.Qty * oi.PricePerItem) - SUM(oi.Qty * p.CostPrice) as Profit FROM dbo.Product p JOIN dbo.OrderItem oi ON p.ID = oi.ProductID WHERE p.Deleted = 0 AND oi.Deleted = 0 AND p.CostPrice > 0 GROUP BY p.ID, p.Name ORDER BY Profit DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem"
+      ]
+    },
+    {
+      "id": "payment_type_024",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Payments by type",
+      "question_uk": "Платежі за типом",
+      "variations_en": [
+        "payment methods",
+        "cash vs card"
+      ],
+      "variations_uk": [
+        "способи оплати",
+        "готівка чи картка"
+      ],
+      "sql": "SELECT PaymentType, COUNT(*) as PaymentCount, SUM(Amount) as TotalAmount FROM dbo.Payment WHERE Deleted = 0 GROUP BY PaymentType ORDER BY TotalAmount DESC",
+      "tables_used": [
+        "Payment"
+      ]
+    },
+    {
+      "id": "financial_summary_025",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Financial summary",
+      "question_uk": "Фінансовий підсумок",
+      "variations_en": [
+        "financial overview",
+        "money summary"
+      ],
+      "variations_uk": [
+        "фінансовий огляд",
+        "грошовий підсумок"
+      ],
+      "sql": "SELECT (SELECT SUM(oi.Qty * oi.PricePerItem) FROM dbo.OrderItem oi WHERE oi.Deleted = 0) as TotalRevenue, (SELECT SUM(Amount) FROM dbo.Payment WHERE Deleted = 0) as TotalPayments, (SELECT SUM(Amount) FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 0) as OutstandingDebt",
+      "tables_used": [
+        "OrderItem",
+        "Payment",
+        "Debt"
+      ]
+    },
+    {
+      "id": "client_balance_026",
+      "category": "lookup",
+      "complexity": "medium",
+      "question_en": "Client account balance",
+      "question_uk": "Залишок на рахунку клієнта",
+      "variations_en": [
+        "what is client balance",
+        "client account status",
+        "how much does client owe"
+      ],
+      "variations_uk": [
+        "який баланс клієнта",
+        "стан рахунку клієнта",
+        "скільки на рахунку",
+        "залишок клієнта"
+      ],
+      "sql": "SELECT c.ID, c.Name, SUM(CASE WHEN cbm.IsDebit = 1 THEN cbm.Amount ELSE -cbm.Amount END) as Balance FROM dbo.Client c LEFT JOIN dbo.ClientBalanceMovement cbm ON c.ID = cbm.ClientID WHERE c.Deleted = 0 AND (cbm.Deleted = 0 OR cbm.ID IS NULL) GROUP BY c.ID, c.Name ORDER BY Balance DESC",
+      "tables_used": [
+        "Client",
+        "ClientBalanceMovement"
+      ]
+    },
+    {
+      "id": "account_movements_period_027",
+      "category": "time_based",
+      "complexity": "complex",
+      "question_en": "Account movements for period",
+      "question_uk": "Рух по рахунку клієнта за період",
+      "variations_en": [
+        "client transactions for month",
+        "account activity",
+        "movement history"
+      ],
+      "variations_uk": [
+        "рух по рахунку за місяць",
+        "операції клієнта",
+        "історія руху",
+        "транзакції клієнта за період"
+      ],
+      "sql": "SELECT cbm.ID, c.Name as ClientName, cbm.Created as Date, cbm.Amount, CASE WHEN cbm.IsDebit = 1 THEN 'Дебет' ELSE 'Кредит' END as Type, cbm.Description FROM dbo.ClientBalanceMovement cbm JOIN dbo.Client c ON cbm.ClientID = c.ID WHERE cbm.Deleted = 0 AND c.Deleted = 0 AND cbm.Created >= DATEADD(month, -1, GETDATE()) ORDER BY cbm.Created DESC",
+      "tables_used": [
+        "ClientBalanceMovement",
+        "Client"
+      ]
+    },
+    {
+      "id": "reconciliation_statement_028",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Reconciliation statement with client",
+      "question_uk": "Акт звірки з клієнтом",
+      "variations_en": [
+        "client reconciliation",
+        "statement of account",
+        "mutual settlements"
+      ],
+      "variations_uk": [
+        "взаєморозрахунки з клієнтом",
+        "звірка з клієнтом",
+        "акт звірки за період",
+        "взаємозалік"
+      ],
+      "sql": "SELECT c.Name as ClientName, SUM(CASE WHEN cbm.IsDebit = 1 THEN cbm.Amount ELSE 0 END) as TotalDebit, SUM(CASE WHEN cbm.IsDebit = 0 THEN cbm.Amount ELSE 0 END) as TotalCredit, SUM(CASE WHEN cbm.IsDebit = 1 THEN cbm.Amount ELSE -cbm.Amount END) as Balance, MIN(cbm.Created) as PeriodStart, MAX(cbm.Created) as PeriodEnd FROM dbo.ClientBalanceMovement cbm JOIN dbo.Client c ON cbm.ClientID = c.ID WHERE cbm.Deleted = 0 AND c.Deleted = 0 GROUP BY c.ID, c.Name HAVING SUM(CASE WHEN cbm.IsDebit = 1 THEN cbm.Amount ELSE -cbm.Amount END) <> 0 ORDER BY Balance DESC",
+      "tables_used": [
+        "ClientBalanceMovement",
+        "Client"
+      ]
+    },
+    {
+      "id": "client_turnover_029",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Client turnover for year",
+      "question_uk": "Оборот по клієнту за рік",
+      "variations_en": [
+        "client yearly turnover",
+        "total client transactions",
+        "client activity volume"
+      ],
+      "variations_uk": [
+        "річний оборот клієнта",
+        "обороти з клієнтом",
+        "обсяг операцій клієнта",
+        "оборот за період"
+      ],
+      "sql": "SELECT c.ID, c.Name, SUM(cbm.Amount) as TotalTurnover, COUNT(cbm.ID) as TransactionCount, SUM(CASE WHEN cbm.IsDebit = 1 THEN cbm.Amount ELSE 0 END) as DebitTurnover, SUM(CASE WHEN cbm.IsDebit = 0 THEN cbm.Amount ELSE 0 END) as CreditTurnover FROM dbo.Client c JOIN dbo.ClientBalanceMovement cbm ON c.ID = cbm.ClientID WHERE c.Deleted = 0 AND cbm.Deleted = 0 AND YEAR(cbm.Created) = YEAR(GETDATE()) GROUP BY c.ID, c.Name ORDER BY TotalTurnover DESC",
+      "tables_used": [
+        "Client",
+        "ClientBalanceMovement"
+      ]
+    },
+    {
+      "id": "balance_as_of_date_030",
+      "category": "time_based",
+      "complexity": "complex",
+      "question_en": "Client balance as of specific date",
+      "question_uk": "Сальдо клієнта на дату",
+      "variations_en": [
+        "balance on date",
+        "historical balance",
+        "balance at start of period"
+      ],
+      "variations_uk": [
+        "баланс на початок періоду",
+        "сальдо на дату",
+        "залишок на початок місяця",
+        "вхідне сальдо"
+      ],
+      "sql": "SELECT c.ID, c.Name, SUM(CASE WHEN cbm.IsDebit = 1 THEN cbm.Amount ELSE -cbm.Amount END) as BalanceAsOfDate FROM dbo.Client c LEFT JOIN dbo.ClientBalanceMovement cbm ON c.ID = cbm.ClientID AND cbm.Deleted = 0 AND cbm.Created < DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0) WHERE c.Deleted = 0 GROUP BY c.ID, c.Name HAVING SUM(CASE WHEN cbm.IsDebit = 1 THEN cbm.Amount ELSE -cbm.Amount END) <> 0 ORDER BY BalanceAsOfDate DESC",
+      "tables_used": [
+        "Client",
+        "ClientBalanceMovement"
+      ]
+    },
+    {
+      "id": "all_client_balances_031",
+      "category": "listing",
+      "complexity": "medium",
+      "question_en": "All client account balances",
+      "question_uk": "Залишки по всіх клієнтах",
+      "variations_en": [
+        "all balances",
+        "client balance list",
+        "accounts receivable"
+      ],
+      "variations_uk": [
+        "всі залишки",
+        "баланси клієнтів",
+        "залишки на рахунках",
+        "дебіторська заборгованість по клієнтах"
+      ],
+      "sql": "SELECT TOP 100 c.ID, c.Name, c.Phone, SUM(CASE WHEN cbm.IsDebit = 1 THEN cbm.Amount ELSE -cbm.Amount END) as Balance, MAX(cbm.Created) as LastMovement FROM dbo.Client c LEFT JOIN dbo.ClientBalanceMovement cbm ON c.ID = cbm.ClientID AND cbm.Deleted = 0 WHERE c.Deleted = 0 GROUP BY c.ID, c.Name, c.Phone HAVING SUM(CASE WHEN cbm.IsDebit = 1 THEN cbm.Amount ELSE -cbm.Amount END) <> 0 ORDER BY Balance DESC",
+      "tables_used": [
+        "Client",
+        "ClientBalanceMovement"
+      ]
+    },
+    {
+      "id": "payment_forecast_032",
+      "category": "forecast",
+      "complexity": "complex",
+      "question_en": "Payment forecast based on history",
+      "question_uk": "Прогноз надходжень",
+      "variations_en": [
+        "expected payments",
+        "projected income",
+        "payment prediction"
+      ],
+      "variations_uk": [
+        "очікувані платежі",
+        "прогноз оплат",
+        "очікувані надходження",
+        "скільки очікуємо отримати",
+        "прогноз на наступний місяць",
+        "скільки надійде",
+        "очікуваний дохід",
+        "план надходжень",
+        "що очікуємо",
+        "майбутні платежі",
+        "прогнозовані надходження"
+      ],
+      "sql": "SELECT \n            DATEPART(month, DATEADD(month, 1, GETDATE())) as ForecastMonth,\n            AVG(MonthlyPayments) as AvgMonthlyPayment,\n            MIN(MonthlyPayments) as MinExpected,\n            MAX(MonthlyPayments) as MaxExpected\n        FROM (\n            SELECT YEAR(Created) as Y, MONTH(Created) as M, SUM(Amount) as MonthlyPayments \n            FROM dbo.Payment WHERE Deleted = 0 AND Created >= DATEADD(year, -1, GETDATE())\n            GROUP BY YEAR(Created), MONTH(Created)\n        ) as MonthlyData",
+      "tables_used": [
+        "Payment"
+      ]
+    },
+    {
+      "id": "receivables_aging_033",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Receivables aging analysis",
+      "question_uk": "Аналіз дебіторки за строками",
+      "variations_en": [
+        "AR aging",
+        "overdue receivables breakdown",
+        "debt age analysis"
+      ],
+      "variations_uk": [
+        "дебіторська заборгованість за строками",
+        "старіння дебіторки",
+        "аналіз прострочки",
+        "вік заборгованості",
+        "дебіторка за строками",
+        "прострочена дебіторка",
+        "скільки прострочено",
+        "борги за віком",
+        "аналіз старіння боргів",
+        "розбивка дебіторки по строках",
+        "структура дебіторки"
+      ],
+      "sql": "SELECT \n            CASE \n                WHEN DATEDIFF(day, cbm.Created, GETDATE()) <= 30 THEN '0-30 днів'\n                WHEN DATEDIFF(day, cbm.Created, GETDATE()) <= 60 THEN '31-60 днів'\n                WHEN DATEDIFF(day, cbm.Created, GETDATE()) <= 90 THEN '61-90 днів'\n                WHEN DATEDIFF(day, cbm.Created, GETDATE()) <= 180 THEN '91-180 днів'\n                ELSE 'більше 180 днів'\n            END as AgeBucket,\n            COUNT(DISTINCT c.ID) as ClientCount,\n            SUM(CASE WHEN cbm.IsDebit = 1 THEN cbm.Amount ELSE -cbm.Amount END) as TotalAmount\n        FROM dbo.ClientBalanceMovement cbm\n        JOIN dbo.Client c ON cbm.ClientID = c.ID\n        WHERE cbm.Deleted = 0 AND c.Deleted = 0\n        GROUP BY CASE \n            WHEN DATEDIFF(day, cbm.Created, GETDATE()) <= 30 THEN '0-30 днів'\n            WHEN DATEDIFF(day, cbm.Created, GETDATE()) <= 60 THEN '31-60 днів'\n            WHEN DATEDIFF(day, cbm.Created, GETDATE()) <= 90 THEN '61-90 днів'\n            WHEN DATEDIFF(day, cbm.Created, GETDATE()) <= 180 THEN '91-180 днів'\n            ELSE 'більше 180 днів'\n        END\n        ORDER BY MIN(DATEDIFF(day, cbm.Created, GETDATE()))",
+      "tables_used": [
+        "ClientBalanceMovement",
+        "Client"
+      ]
+    },
+    {
+      "id": "period_comparison_034",
+      "category": "comparison",
+      "complexity": "complex",
+      "question_en": "Compare financial periods",
+      "question_uk": "Порівняння періодів",
+      "variations_en": [
+        "period over period",
+        "month comparison",
+        "quarterly comparison",
+        "compare this month to last",
+        "month over month",
+        "trend analysis",
+        "period dynamics",
+        "how did it change",
+        "compare periods"
+      ],
+      "variations_uk": [
+        "порівняння місяців",
+        "динаміка по періодах",
+        "порівняти квартали",
+        "аналіз періодів",
+        "порівняй цей місяць з минулим",
+        "порівняй місяці",
+        "як змінились показники",
+        "динаміка за період",
+        "тренд по місяцях",
+        "зміни по періодах",
+        "місяць до місяця",
+        "квартал до кварталу",
+        "порівняльний аналіз",
+        "як було раніше",
+        "зміни відносно минулого періоду"
+      ],
+      "sql": "SELECT \n            YEAR(Created) as Year,\n            MONTH(Created) as Month,\n            SUM(CASE WHEN IsDebit = 1 THEN Amount ELSE 0 END) as TotalDebit,\n            SUM(CASE WHEN IsDebit = 0 THEN Amount ELSE 0 END) as TotalCredit,\n            SUM(CASE WHEN IsDebit = 1 THEN Amount ELSE -Amount END) as NetChange,\n            COUNT(*) as TransactionCount\n        FROM dbo.ClientBalanceMovement\n        WHERE Deleted = 0 AND Created >= DATEADD(year, -1, GETDATE())\n        GROUP BY YEAR(Created), MONTH(Created)\n        ORDER BY Year, Month",
+      "tables_used": [
+        "ClientBalanceMovement"
+      ]
+    }
+  ]
+}
