@@ -8,6 +8,7 @@ pydantic-settings>=2.0.0
 
 # Database
 pyodbc>=5.0.0
+pymssql>=2.2.0
 sqlalchemy>=2.0.0
 
 # Caching

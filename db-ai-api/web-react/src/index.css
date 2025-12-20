@@ -1,0 +1,155 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom base layer for Grok-style elements */
+@layer base {
+  body {
+    @apply bg-white min-h-screen antialiased;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    @apply w-2;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400;
+  }
+}
+
+/* Custom component classes */
+@layer components {
+  .btn-primary {
+    @apply bg-content-primary text-white px-6 py-3 rounded-full font-medium
+           shadow-grok hover:shadow-grok-lg transform hover:-translate-y-0.5
+           transition-all duration-200 ease-out;
+  }
+
+  .input-grok {
+    @apply bg-white border border-surface-border rounded-full
+           px-5 py-4 focus:border-gray-400 focus:ring-2 focus:ring-gray-100
+           transition-all duration-200 outline-none;
+  }
+
+  .card-grok {
+    @apply bg-white rounded-2xl p-6 shadow-sm border border-surface-border
+           hover:shadow-grok transition-all duration-200;
+  }
+
+  /* Analytics Response Card */
+  .analytics-response {
+    @apply bg-white rounded-2xl p-6 border border-surface-border shadow-sm;
+  }
+
+  .analytics-response h3 {
+    @apply text-xl font-semibold text-content-primary mb-5;
+  }
+
+  /* Stats Grid */
+  .stats-grid {
+    @apply grid grid-cols-2 md:grid-cols-4 gap-4 mb-5;
+  }
+
+  .stats-grid.big {
+    @apply md:grid-cols-3;
+  }
+
+  .stat-card {
+    @apply bg-surface-secondary rounded-xl p-4 text-center border border-surface-border;
+  }
+
+  .stat-card.highlight {
+    @apply bg-content-primary text-white border-0;
+  }
+
+  .stat-value {
+    @apply text-2xl font-bold text-content-primary;
+  }
+
+  .stat-card.highlight .stat-value {
+    @apply text-white;
+  }
+
+  .stat-label {
+    @apply text-sm mt-1 text-content-muted;
+  }
+
+  .stat-card.highlight .stat-label {
+    @apply text-white/80;
+  }
+
+  /* Data Table */
+  .data-table {
+    @apply w-full text-sm bg-white rounded-xl overflow-hidden border border-surface-border;
+  }
+
+  .data-table th {
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider
+           text-content-muted bg-surface-secondary;
+  }
+
+  .data-table td {
+    @apply px-4 py-3 border-t border-surface-border;
+  }
+
+  .data-table tr:hover td {
+    @apply bg-surface-hover;
+  }
+
+  /* Chart Container */
+  .chart-inline {
+    @apply bg-white rounded-xl p-5 border border-surface-border mb-5;
+    height: 300px;
+  }
+
+  /* Search Response */
+  .search-response {
+    @apply bg-white rounded-2xl p-6 border border-surface-border;
+  }
+
+  .detected-regions {
+    @apply text-primary-600 font-medium mb-4;
+  }
+
+  .results-summary {
+    @apply flex flex-col gap-3 mt-4;
+  }
+
+  .result-group {
+    @apply bg-surface-secondary rounded-xl p-4 border border-surface-border;
+  }
+
+  .result-group-header {
+    @apply flex justify-between items-center mb-3;
+  }
+
+  .table-badge {
+    @apply px-3 py-1 rounded-full text-xs font-semibold bg-primary-100 text-primary-700;
+  }
+
+  .result-count {
+    @apply text-xs text-content-muted;
+  }
+
+  .result-items {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .result-item {
+    @apply text-sm text-content-secondary pl-2;
+  }
+
+  .result-more {
+    @apply text-sm text-content-muted italic pl-2;
+  }
+
+  .no-results {
+    @apply text-center py-10 bg-white rounded-2xl border border-surface-border;
+  }
+}

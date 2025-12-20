@@ -29,8 +29,8 @@ class WeeklyForecast(BaseModel):
     predicted_orders: float = Field(default=0.0, description="Predicted number of orders for week")
 
     # Confidence intervals (predictions only)
-    confidence_lower: float = Field(default=0.0, description="95% CI lower (predictions only)")
-    confidence_upper: float = Field(default=0.0, description="95% CI upper (predictions only)")
+    confidence_lower: Optional[float] = Field(default=None, description="95% CI lower (predictions only)")
+    confidence_upper: Optional[float] = Field(default=None, description="95% CI upper (predictions only)")
 
     # Expected customers (predictions only)
     expected_customers: List[ExpectedCustomer] = Field(

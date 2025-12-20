@@ -158,7 +158,11 @@ class ForecastEngine:
         cursor = self.conn.cursor()
         cursor.execute(query, (product_id, as_of_date))
 
-        customers = [row[0] for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+        if rows and isinstance(rows[0], dict):
+            customers = [row['ClientID'] for row in rows]
+        else:
+            customers = [row[0] for row in rows]
         cursor.close()
 
         return customers
@@ -321,6 +325,7 @@ class ForecastEngine:
     def _forecast_to_dict(self, forecast: ProductForecast) -> Dict:
         return {
             'product_id': forecast.product_id,
+            'product_name': forecast.product_name,
             'forecast_period_weeks': forecast.forecast_period_weeks,
             'historical_weeks': forecast.historical_weeks,
             'summary': forecast.summary,
@@ -333,6 +338,7 @@ class ForecastEngine:
     def _dict_to_forecast(self, data: Dict) -> ProductForecast:
         return ProductForecast(
             product_id=data['product_id'],
+            product_name=data.get('product_name'),
             forecast_period_weeks=data['forecast_period_weeks'],
             historical_weeks=data.get('historical_weeks', 0),
             summary=data['summary'],

@@ -56,7 +56,8 @@ class SQLAgent:
         )
         self.schema_extractor = schema_extractor or SchemaExtractor(self.engine)
         self.table_selector = table_selector or TableSelector(self.schema_extractor)
-        self.table_selector.index_schema()
+        # Force refresh to ensure FK coverage and embeddings are current
+        self.table_selector.index_schema(force_refresh=True)
 
         # Query example retriever for few-shot RAG
         self.example_retriever = query_example_retriever or QueryExampleRetriever(
@@ -73,7 +74,7 @@ class SQLAgent:
 
         # Initialize JoinPathGraph for dynamic join path computation
         try:
-            schema = self.schema_extractor.extract_full_schema()
+            schema = self.schema_extractor.extract_full_schema(force_refresh=True)
             if not schema or not schema.get("tables"):
                 raise ValueError("Schema extraction returned empty or malformed data")
             self.join_graph = JoinPathGraph(schema)
@@ -81,12 +82,22 @@ class SQLAgent:
             logger.info(f"JoinPathGraph initialized: {stats}")
             if stats["edge_count"] < 100:
                 logger.warning(f"JoinPathGraph has few edges ({stats['edge_count']}), FK extraction may have failed")
+            # Precompute join templates (priority-ordered, capped via settings)
+            self.precomputed_join_templates = self._precompute_join_templates(
+                schema, max_pairs=settings.precompute_max_pairs
+            )
         except Exception as e:
             logger.error(f"Failed to initialize JoinPathGraph: {e}")
             self.join_graph = None  # Graceful degradation
+            self.precomputed_join_templates = {}
 
         # Cache for dynamic relationships (generated from schema FKs)
         self._relationships_cache: Optional[str] = None
+        self._join_rulebook_cache: Optional[str] = None
+
+    def _canonical_pair_key(self, t1: str, t2: str) -> str:
+        """Stable key for unordered table pair."""
+        return "||".join(sorted([normalize_table_name(t1), normalize_table_name(t2)]))
 
     def _get_relationships_from_schema(self) -> str:
         """Generate TABLE RELATIONSHIPS dynamically from schema foreign keys."""
@@ -115,6 +126,167 @@ class SQLAgent:
         self._relationships_cache = result
         logger.info(f"Generated {len(relationships)} relationships from schema FKs")
         return result
+
+    def _alias_for(self, table: str) -> str:
+        """Best-effort alias for rulebook display (does not enforce uniqueness)."""
+        t = normalize_table_name(table)
+        return JoinPathGraph.TABLE_ALIASES.get(t, t[:3].lower())
+
+    def _get_join_rulebook(self, max_chars: Optional[int] = None) -> str:
+        """Generate a compact JOIN RULEBOOK listing all FK edges with aliases.
+
+        Set max_chars=None to include all edges without truncation.
+        """
+        if self._join_rulebook_cache:
+            return self._join_rulebook_cache
+
+        schema = self.schema_extractor.extract_full_schema()
+        lines = []
+        seen = set()
+
+        for table_name, table_info in schema["tables"].items():
+            parent_alias = self._alias_for(table_name)
+            for fk in table_info.get("foreign_keys", []):
+                child_cols = ", ".join(fk.get("columns", []))
+                ref_table = fk.get("referred_table", "")
+                ref_cols = ", ".join(fk.get("referred_columns", []))
+                if not ref_table:
+                    continue
+                ref_alias = self._alias_for(ref_table)
+                key = f"{table_name}:{child_cols}->{ref_table}:{ref_cols}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                lines.append(f"- {parent_alias}.{child_cols} -> {ref_alias}.{ref_cols}  ({table_name} -> {ref_table})")
+
+        if not lines:
+            return ""
+
+        # Priority sort: core/critical hubs first, then alphabetically
+        def priority(line: str) -> tuple:
+            # Extract table names from line tail "(TableA -> TableB)"
+            if "(" in line and "->" in line:
+                tail = line.split("(")[-1].rstrip(")")
+                parts = tail.split("->")
+                if len(parts) == 2:
+                    a = parts[0].strip()
+                    b = parts[1].strip()
+                else:
+                    a = b = ""
+            else:
+                a = b = ""
+            core_hubs = {"Client", "ClientAgreement", "Order", "OrderItem", "Product", "Sale", "ProductAvailability", "Region"}
+            score = 0
+            if a.replace("dbo.", "") in core_hubs:
+                score -= 2
+            if b.replace("dbo.", "") in core_hubs:
+                score -= 2
+            return (score, a, b, line)
+
+        lines = sorted(lines, key=priority)
+        header = "######################## JOIN RULEBOOK (FK edges) ########################\n"
+        clipped = []
+        if max_chars is not None:
+            budget = max_chars - len(header)
+            used = 0
+            for line in lines:
+                if used + len(line) + 1 > budget:
+                    clipped.append(f"... ({len(lines) - len(clipped)} more edges clipped)")
+                    break
+                clipped.append(line)
+                used += len(line) + 1
+        else:
+            clipped = lines
+
+        rulebook = header + "\n".join(clipped)
+        self._join_rulebook_cache = rulebook
+        logger.info(f"Join rulebook generated with {len(clipped)} edges" + (f" (budget {max_chars} chars)" if max_chars else ""))
+        return rulebook
+
+    def _precompute_join_templates(self, schema: Dict[str, Any], max_pairs: Optional[int] = None) -> Dict[str, str]:
+        """Precompute join templates for many table pairs to reduce LLM work.
+
+        Priority order:
+        1) Direct FK-linked pairs
+        2) Critical business paths
+        3) Core table combinations
+        4) High-row-count table combinations (top 30 by rows, cross-join pairwise)
+        If max_pairs is None, attempt full coverage of all table pairs (may be heavy).
+        """
+        if not self.join_graph:
+            return {}
+
+        pairs = []
+        seen = set()
+
+        # FK-linked pairs from schema
+        for table_name, table_info in schema.get("tables", {}).items():
+            for fk in table_info.get("foreign_keys", []):
+                parent = normalize_table_name(table_name)
+                referred = normalize_table_name(fk.get("referred_table", ""))
+                if not referred:
+                    continue
+                key = self._canonical_pair_key(parent, referred)
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append((parent, referred))
+
+        # Critical business paths from JoinPathGraph
+        for source, target in getattr(JoinPathGraph, "CRITICAL_PATHS", {}).keys():
+            key = self._canonical_pair_key(source, target)
+            if key not in seen:
+                seen.add(key)
+                pairs.append((normalize_table_name(source), normalize_table_name(target)))
+
+        # Pairwise combinations of core tables (broaden coverage)
+        core_tables = [normalize_table_name(t.replace("dbo.", "").replace("[", "").replace("]", ""))
+                       for t in TableSelector.CORE_TABLES]
+        for i in range(len(core_tables)):
+            for j in range(i + 1, len(core_tables)):
+                key = self._canonical_pair_key(core_tables[i], core_tables[j])
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append((core_tables[i], core_tables[j]))
+
+        templates: Dict[str, str] = {}
+        # High-row-count tables (top 30) pairwise to bias important joins
+        row_sorted = sorted(
+            [(info.get("row_count") or 0, name) for name, info in schema.get("tables", {}).items()],
+            reverse=True
+        )
+        top_row_tables = [name for _, name in row_sorted[:30]]
+        for i in range(len(top_row_tables)):
+            for j in range(i + 1, len(top_row_tables)):
+                key = self._canonical_pair_key(top_row_tables[i], top_row_tables[j])
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append((top_row_tables[i], top_row_tables[j]))
+
+        # If not capped, add all table pairs for full coverage
+        if max_pairs is None:
+            table_names = list(schema.get("tables", {}).keys())
+            for i in range(len(table_names)):
+                for j in range(i + 1, len(table_names)):
+                    key = self._canonical_pair_key(table_names[i], table_names[j])
+                    if key not in seen:
+                        seen.add(key)
+                        pairs.append((table_names[i], table_names[j]))
+
+        limited_pairs = pairs if max_pairs is None else pairs[:max_pairs]
+        skipped = 0
+
+        for a, b in limited_pairs:
+            key = self._canonical_pair_key(a, b)
+            try:
+                template = self.join_graph.get_join_template([a, b], main_table=a)
+                if template:
+                    templates[key] = template
+            except Exception as e:
+                skipped += 1
+                logger.debug(f"Join template precompute failed for {a}-{b}: {e}")
+
+        logger.info(f"Precomputed {len(templates)} join templates (pairs capped at {max_pairs}, skipped={skipped})")
+        return templates
 
     def _get_join_templates_for_tables(self, tables: List[str]) -> str:
         """Generate JOIN templates for the selected tables using JoinPathGraph.
@@ -191,6 +363,39 @@ MANDATORY JOIN TEMPLATES:
 
         logger.debug(f"No critical path templates matched for: {list(table_set)[:5]}")
         return ""
+
+    def _get_precomputed_join_templates_for_tables(self, tables: List[str], limit: Optional[int] = None) -> str:
+        """Retrieve precomputed join templates for selected table pairs.
+
+        If limit is None, include all available templates for the selected pairs.
+        """
+        if not tables or not self.precomputed_join_templates:
+            return ""
+
+        selected = [normalize_table_name(t) for t in tables]
+        templates = []
+        used_keys = set()
+
+        for i in range(len(selected)):
+            for j in range(i + 1, len(selected)):
+                key = self._canonical_pair_key(selected[i], selected[j])
+                if key in self.precomputed_join_templates and key not in used_keys:
+                    templates.append(self.precomputed_join_templates[key])
+                    used_keys.add(key)
+                    if limit and len(templates) >= limit:
+                        break
+            if limit and len(templates) >= limit:
+                break
+
+        if not templates:
+            return ""
+
+        header = """
+######################## PRECOMPUTED JOIN TEMPLATES ########################
+These are ready-made FROM/JOIN blocks for selected table pairs. Copy/paste
+directly. Do NOT invent alternative paths if a template exists below.
+"""
+        return header + "\n\n".join(templates)
 
     def generate_sql(self, question: str, max_retries: int = 2, include_explanation: bool = False) -> Dict[str, Any]:
         logger.info(f"Generating SQL for: {question}")
@@ -455,12 +660,43 @@ COLUMN NAME RULES:
                 logger.error(f"Failed to generate join templates: {e}")
                 join_templates = ""
 
+        # Precomputed join templates for selected pairs (fast path, capped)
+        precomputed_templates = ""
+        if selected_tables and self.precomputed_join_templates:
+            # use per-query cap from settings to preserve prompt space
+            precomputed_templates = self._get_precomputed_join_templates_for_tables(
+                selected_tables,
+                limit=settings.precomputed_per_query_limit
+            )
+
+        # Full join rulebook (FK edges with aliases) for redundancy
+        join_rulebook = self._get_join_rulebook(max_chars=settings.join_rulebook_max_chars)
+
         # Keep flat relationships as fallback for less common tables
         relationships = self._get_relationships_from_schema()
 
-        prompt = f"""You are a Microsoft SQL Server T-SQL expert for ConcordDb database.
+        # Combine detailed schema with explicit FK relationship map so the LLM
+        # always sees how tables connect (helps it pick correct join keys)
+        schema_section = context
+        if relationships:
+            schema_section = f"""{context}
+
+{relationships}"""
+
+        # Optional prompt budget guardrail
+        def _truncate_to_budget(text: str, budget: int) -> str:
+            if budget and len(text) > budget:
+                return text[:budget] + "\n-- TRUNCATED TO FIT PROMPT BUDGET --"
+            return text
+
+        # Build prompt body
+        prompt_body = f"""You are a Microsoft SQL Server T-SQL expert for ConcordDb database.
+
+Standard aliases: Client=c, ClientAgreement=ca, Order=o, OrderItem=oi, Product=p, Sale=s, ProductAvailability=pa, Storage=st, Region=r, User=u, Payment=pay, Invoice=inv, Debt=d
 
 {join_templates}
+{precomputed_templates}
+{join_rulebook}
 {self.CRITICAL_RULES}
 
 DATABASE SCHEMA (3 tiers):
@@ -468,7 +704,7 @@ DATABASE SCHEMA (3 tiers):
 - TIER 2: Relevant tables with KEY columns only (ID, FKs, important fields)
 - TIER 3: Other tables as compact list - TableName(col1, col2...) format
 
-{context}
+{schema_section}
 
 SQL RULES:
 1. Use ONLY columns listed above - NEVER invent or guess column names
@@ -483,7 +719,10 @@ QUESTION: {question}
 
 Generate ONLY the SQL query, no explanation:
 """
-        return prompt
+        # Apply prompt budget if configured
+        prompt_budget = getattr(settings, "prompt_max_chars", None)
+        prompt_body = _truncate_to_budget(prompt_body, prompt_budget) if prompt_budget else prompt_body
+        return prompt_body
 
     def _extract_sql(self, llm_response: str) -> str:
         # Try to extract from code blocks first

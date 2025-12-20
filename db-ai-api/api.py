@@ -1,9 +1,12 @@
 """FastAPI service for Text-to-SQL API."""
+import asyncio
+from asyncio import Semaphore
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -11,6 +14,9 @@ from config import settings
 from sql_agent import SQLAgent
 from schema_extractor import SchemaExtractor
 from table_selector import TableSelector
+
+# Semaphore to limit concurrent LLM calls (prevents Ollama contention)
+query_semaphore = Semaphore(2)  # Max 2 concurrent LLM generations
 
 
 # Initialize FastAPI app
@@ -28,6 +34,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add Gzip compression for responses > 1KB (20-50x smaller for large result sets)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 # Pydantic models for request/response
@@ -62,7 +71,8 @@ class QueryResponse(BaseModel):
     question: str
     sql: str
     explanation: Optional[str] = None
-    generation_attempts: int
+    generation_attempts: Optional[int] = None
+    attempts: Optional[int] = None  # Legacy field from sql_agent
     execution: Optional[Dict[str, Any]] = None
 
 
@@ -132,28 +142,80 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint with component status."""
+    components = {}
+    all_healthy = True
+
+    # Check database connection
     try:
-        # Check database connection
-        schema_extractor.engine.connect()
-
-        # Check Ollama
-        agent.ollama_client.list()
-
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "ollama": "connected",
-            "timestamp": datetime.now().isoformat(),
-        }
+        with schema_extractor.engine.connect() as conn:
+            pass
+        components["database"] = {"status": "ok"}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
+        components["database"] = {"status": "error", "message": str(e)}
+        all_healthy = False
+
+    # Check Ollama
+    try:
+        agent.ollama_client.list()
+        components["ollama"] = {"status": "ok"}
+    except Exception as e:
+        components["ollama"] = {"status": "error", "message": str(e)}
+        all_healthy = False
+
+    # Check query examples
+    if agent.example_retriever.is_available():
+        stats = agent.example_retriever.get_stats()
+        components["query_examples"] = {
+            "status": "ok",
+            "count": stats["total_examples"],
+            "domains": stats.get("domains", {})
+        }
+    else:
+        components["query_examples"] = {"status": "unavailable"}
+
+    response = {
+        "status": "healthy" if all_healthy else "degraded",
+        "components": components,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    if not all_healthy:
+        raise HTTPException(status_code=503, detail=response)
+
+    return response
+
+
+@app.get("/query-examples/stats")
+async def query_examples_stats():
+    """Get query examples statistics."""
+    if not agent.example_retriever.is_available():
+        raise HTTPException(status_code=503, detail="Query examples not available")
+    return agent.example_retriever.get_stats()
+
+
+@app.get("/query-examples/test")
+async def test_query_examples(query: str = Query(..., description="Test query")):
+    """Test query example retrieval for a specific query."""
+    if not agent.example_retriever.is_available():
+        raise HTTPException(status_code=503, detail="Query examples not available")
+
+    examples = agent.example_retriever.find_similar_with_correction(query, top_k=3)
+    return {
+        "query": query,
+        "examples_found": len(examples),
+        "examples": examples
+    }
 
 
 @app.post("/query", response_model=QueryResponse)
 async def query_database(request: QueryRequest):
     """
     Generate SQL from natural language and optionally execute it.
+
+    Uses async LLM calls for concurrent request handling.
+    Limited to 2 concurrent LLM calls to prevent Ollama contention.
+    Includes timeout for better SLA.
 
     Args:
         request: Query request with natural language question
@@ -164,15 +226,24 @@ async def query_database(request: QueryRequest):
     try:
         logger.info(f"Received query: {request.question}")
 
-        result = agent.query(
-            question=request.question,
-            execute=request.execute,
-            max_rows=request.max_rows,
-            include_explanation=request.include_explanation,
-        )
+        # Use semaphore to limit concurrent LLM calls (prevents Ollama thrashing)
+        async with query_semaphore:
+            # Apply timeout for better SLA
+            result = await asyncio.wait_for(
+                agent.query_async(
+                    question=request.question,
+                    execute=request.execute,
+                    max_rows=request.max_rows,
+                    include_explanation=request.include_explanation,
+                ),
+                timeout=settings.query_timeout
+            )
 
         return QueryResponse(**result)
 
+    except asyncio.TimeoutError:
+        logger.error(f"Query timeout after {settings.query_timeout}s: {request.question}")
+        raise HTTPException(status_code=504, detail=f"Query generation timeout ({settings.query_timeout}s)")
     except Exception as e:
         logger.error(f"Query failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -313,6 +384,9 @@ async def explain_query(question: str = Body(..., embed=True)):
     """
     Generate SQL and explanation without executing.
 
+    Uses async LLM calls for concurrent request handling.
+    Limited to 2 concurrent LLM calls with timeout.
+
     Args:
         question: Natural language question
 
@@ -320,7 +394,12 @@ async def explain_query(question: str = Body(..., embed=True)):
         SQL query with explanation
     """
     try:
-        result = agent.generate_sql(question, include_explanation=True)
+        # Use semaphore and timeout for consistency with /query
+        async with query_semaphore:
+            result = await asyncio.wait_for(
+                agent.generate_sql_async(question, include_explanation=True),
+                timeout=settings.query_timeout
+            )
 
         return {
             "question": question,
@@ -329,6 +408,9 @@ async def explain_query(question: str = Body(..., embed=True)):
             "relevant_tables": table_selector.find_relevant_tables(question, top_k=5),
         }
 
+    except asyncio.TimeoutError:
+        logger.error(f"Explain timeout after {settings.query_timeout}s: {question}")
+        raise HTTPException(status_code=504, detail=f"Query generation timeout ({settings.query_timeout}s)")
     except Exception as e:
         logger.error(f"Failed to explain query: {e}")
         raise HTTPException(status_code=500, detail=str(e))

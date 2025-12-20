@@ -313,16 +313,18 @@ class TableSelector:
         rag_tables = []
 
         for table in relevant_tables:
-            table_name = table["table_name"]
-            if table_name in included_tables:
+            raw_name = table["table_name"]
+            # Clean dbo. prefix for lookups (RAG returns dbo.TableName)
+            clean_name = raw_name.replace("dbo.", "")
+            if clean_name in included_tables:
                 continue
 
-            table_info = schema["tables"].get(table_name) or schema["views"].get(table_name)
+            table_info = schema["tables"].get(clean_name) or schema["views"].get(clean_name)
             if table_info:
                 # Use ultra-compact format for Tier 2 (saves ~60% tokens)
-                compact_stmt = self._format_as_ultra_compact(table_name, table_info)
+                compact_stmt = self._format_as_ultra_compact(clean_name, table_info)
                 rag_tables.append(compact_stmt)
-                included_tables.add(table_name)
+                included_tables.add(clean_name)
 
         if rag_tables:
             tier2_parts.append("-- === TIER 2: RELEVANT TABLES (ID*, FKcol→Table, key cols) ===")

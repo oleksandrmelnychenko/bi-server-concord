@@ -28,6 +28,7 @@ class WeeklyForecast:
 @dataclass
 class ProductForecast:
     product_id: int
+    product_name: Optional[str]
     forecast_period_weeks: int
     historical_weeks: int
 
@@ -96,6 +97,7 @@ class ProductAggregator:
 
             return ProductForecast(
                 product_id=product_id,
+                product_name=product_name,
                 forecast_period_weeks=self.forecast_weeks,
                 historical_weeks=self.historical_weeks,
                 summary=summary,
@@ -151,9 +153,14 @@ class ProductAggregator:
 
             week_data_map = {}
             for row in rows:
-                week_start_dt = row[0]
-                quantity = float(row[1] or 0)
-                orders = int(row[2] or 0)
+                if isinstance(row, dict):
+                    week_start_dt = row['week_start']
+                    quantity = float(row['total_quantity'] or 0)
+                    orders = int(row['total_orders'] or 0)
+                else:
+                    week_start_dt = row[0]
+                    quantity = float(row[1] or 0)
+                    orders = int(row[2] or 0)
 
                 week_key = week_start_dt.strftime('%Y-%m-%d') if hasattr(week_start_dt, 'strftime') else str(week_start_dt)
                 week_data_map[week_key] = {'quantity': quantity, 'orders': orders}

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # Ollama Configuration
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "sqlcoder:7b"
+    ollama_model: str = "codellama:34b"
 
     # API Configuration
     api_host: str = "0.0.0.0"
@@ -25,13 +25,24 @@ class Settings(BaseSettings):
 
     # Security
     read_only_mode: bool = True
-    query_timeout: int = 30
+    query_timeout: int = 60  # Increased for 34B model
     max_rows_returned: int = 1000
 
     # RAG Configuration
     vector_db_path: str = "./vector_db"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     top_k_tables: int = 10
+
+    # Query Examples RAG Configuration
+    query_examples_db: str = "./chroma_db_examples_v2"
+    query_examples_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    query_examples_top_k: int = 3
+
+    # Join/template prompt budgeting
+    precompute_max_pairs: int = 50000  # total join pairs to precompute (priority-ordered; high to approach full coverage)
+    precomputed_per_query_limit: int = 120  # join templates to include per query
+    join_rulebook_max_chars: int = 20000  # FK rulebook size budget in chars
+    prompt_max_chars: int = 32000  # overall prompt budget guardrail
 
     # Logging
     log_level: str = "INFO"

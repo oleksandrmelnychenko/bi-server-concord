@@ -1,0 +1,118 @@
+version: '3.8'
+
+# Development Docker Compose for Concord AI
+# Hot-reload enabled for rapid development
+
+services:
+  # Text-to-SQL API - Ollama powered (port 8002)
+  sql-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: concord-sql-api
+    ports:
+      - "8002:8002"
+    environment:
+      - DB_HOST=${DB_HOST:-78.152.175.67}
+      - DB_PORT=${DB_PORT:-1433}
+      - DB_NAME=${DB_NAME:-ConcordDb_v5}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DRIVER=${DB_DRIVER:-ODBC Driver 18 for SQL Server}
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=codellama:34b-instruct
+      - API_PORT=8002
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: uvicorn api:app --reload --host 0.0.0.0 --port 8002
+    restart: unless-stopped
+
+  # RAG API - Semantic Search (port 8000)
+  rag-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: concord-rag-api
+    ports:
+      - "8000:8000"
+    environment:
+      - CHROMA_DIR=/app/chroma_db_full
+      - COLLECTION_NAME=concorddb_full
+      - EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
+    volumes:
+      # Mount source code for hot-reload
+      - .:/app
+      # Mount vector database (read-only)
+      - ./chroma_db_full:/app/chroma_db_full:ro
+      - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: uvicorn rag_api_multilingual:app --reload --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # Analytics API - SQL Queries (port 8001)
+  analytics-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: concord-analytics-api
+    ports:
+      - "8001:8001"
+    environment:
+      - DB_HOST=${DB_HOST:-78.152.175.67}
+      - DB_PORT=${DB_PORT:-1433}
+      - DB_NAME=${DB_NAME:-ConcordDb_v5}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DRIVER=${DB_DRIVER:-ODBC Driver 18 for SQL Server}
+    volumes:
+      # Mount source code for hot-reload
+      - .:/app
+      - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: uvicorn analytics_api:app --reload --host 0.0.0.0 --port 8001
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Web UI (port 3000)
+  web-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: concord-web-ui
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount source code for hot-reload (HTML, CSS, JS)
+      - .:/app
+      - ./logs:/app/logs
+    depends_on:
+      - rag-api
+      - analytics-api
+    command: uvicorn web_server:app --reload --host 0.0.0.0 --port 3000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+networks:
+  default:
+    name: concord-ai-dev-network

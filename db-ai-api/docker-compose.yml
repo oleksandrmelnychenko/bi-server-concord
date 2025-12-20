@@ -1,66 +1,133 @@
 version: '3.8'
 
 services:
-  db-ai-api:
+  # RAG API - Semantic Search (port 8000)
+  rag-api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: db-ai-api
+    container_name: rag-api
     ports:
       - "8000:8000"
     environment:
-      # Database Configuration
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_NAME=${DB_NAME}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_DRIVER=${DB_DRIVER}
-
-      # Ollama Configuration (host network on Mac)
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-sqlcoder:7b}
-
-      # API Configuration
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-      - API_RELOAD=False
-
-      # Security
-      - READ_ONLY_MODE=${READ_ONLY_MODE:-True}
-      - QUERY_TIMEOUT=${QUERY_TIMEOUT:-30}
-      - MAX_ROWS_RETURNED=${MAX_ROWS_RETURNED:-1000}
-
       # RAG Configuration
-      - VECTOR_DB_PATH=/app/vector_db
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
-      - TOP_K_TABLES=${TOP_K_TABLES:-10}
-
-      # Logging
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - LOG_SQL_QUERIES=${LOG_SQL_QUERIES:-True}
-
+      - CHROMA_DIR=/app/chroma_db_full
+      - COLLECTION_NAME=concorddb_full
+      - EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
     volumes:
-      # Persist vector database
-      - ./vector_db:/app/vector_db
-      # Persist logs
+      # Full embeddings (2.28M documents)
+      - ./chroma_db_full:/app/chroma_db_full
       - ./logs:/app/logs
-      # Persist schema cache
-      - ./schema_cache.json:/app/schema_cache.json
-
-    # Use host network on Mac to access Ollama
     extra_hosts:
       - "host.docker.internal:host-gateway"
-
     restart: unless-stopped
-
+    command: python rag_api_multilingual.py
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
+
+  # Analytics API - SQL Queries (port 8001)
+  analytics-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: analytics-api
+    ports:
+      - "8001:8001"
+    environment:
+      # Database Configuration (use host.docker.internal to reach host machine)
+      - DB_HOST=${DB_HOST:-host.docker.internal}
+      - DB_PORT=${DB_PORT:-1433}
+      - DB_NAME=${DB_NAME:-ConcordDb_v5}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DRIVER=${DB_DRIVER:-ODBC Driver 18 for SQL Server}
+      # TDS version for pymssql TLS compatibility
+      - TDSVER=7.3
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    command: python analytics_api.py
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Text-to-SQL API with Query Examples RAG (port 8003)
+  text-to-sql-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: text-to-sql-api
+    ports:
+      - "8003:8003"
+    environment:
+      # Database Configuration (use host.docker.internal to reach host machine)
+      - DB_HOST=${DB_HOST:-host.docker.internal}
+      - DB_PORT=${DB_PORT:-1433}
+      - DB_NAME=${DB_NAME:-ConcordDb_v5}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DRIVER=${DB_DRIVER:-ODBC Driver 18 for SQL Server}
+      # TDS version for pymssql TLS compatibility
+      - TDSVER=7.3
+      # Ollama Configuration
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-codellama:34b}
+      # API Configuration
+      - API_HOST=0.0.0.0
+      - API_PORT=8003
+      # Security/Timeout
+      - QUERY_TIMEOUT=${QUERY_TIMEOUT:-120}
+      # Query Examples Configuration
+      - QUERY_EXAMPLES_DB=/app/chroma_db_examples_v2
+      - EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
+    volumes:
+      # Query examples embeddings (134 base examples)
+      - ./chroma_db_examples_v2:/app/chroma_db_examples_v2
+      # Training data templates
+      - ./training_data:/app/training_data
+      - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    command: python main.py
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Web UI - React + Nginx (port 3000)
+  web-ui:
+    build:
+      context: ./web-react
+      dockerfile: Dockerfile
+      args:
+        - VITE_RAG_API=http://localhost:8000
+        - VITE_ANALYTICS_API=http://localhost:8001
+        - VITE_SQL_API=http://localhost:8003
+    container_name: web-ui
+    ports:
+      - "3000:80"
+    depends_on:
+      - rag-api
+      - analytics-api
+      - text-to-sql-api
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
 networks:
   default:
-    name: db-ai-network
+    name: concord-ai-network

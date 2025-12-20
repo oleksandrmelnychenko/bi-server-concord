@@ -2,12 +2,18 @@
 
 import os
 import json
+import math
 import pyodbc
 import logging
 import redis
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Set, Optional
 from collections import defaultdict, Counter
+from contextlib import contextmanager
+
+# =============================================================================
+# CONFIGURATION CONSTANTS
+# =============================================================================
 
 DB_CONFIG = {
     'server': os.environ.get('MSSQL_HOST', '78.152.175.67'),
@@ -31,6 +37,70 @@ COLLAB_SPARSE_PRODUCTS = 10
 MAX_CANDIDATES = 1000
 ANN_NEIGHBORS_PATH = os.getenv('ANN_NEIGHBORS_PATH')  # JSON file containing {product_id: [{\"product_id\": int, \"score\": float}, ...]}
 ANN_NEIGHBORS_TOPK = int(os.getenv('ANN_NEIGHBORS_TOPK', '200'))
+
+# =============================================================================
+# SCORING CONSTANTS
+# =============================================================================
+
+# Recency decay: score = e^(-days_ago / RECENCY_DECAY_DAYS)
+# 90 days = ~37% score remaining after 90 days (half-life behavior)
+RECENCY_DECAY_DAYS = 90
+
+# Co-purchase analysis window (days to look back for co-occurrence patterns)
+CO_PURCHASE_WINDOW_DAYS = 180
+
+# Cycle detection constants
+MIN_CYCLE_DAYS = 3            # Cycles shorter than this are ignored (likely noise)
+CYCLE_TOLERANCE_MIN_DAYS = 7  # Minimum tolerance window for cycle detection
+
+# Diversity filter: max products per product group
+MAX_PRODUCTS_PER_GROUP = 3
+
+# =============================================================================
+# SEGMENT-SPECIFIC WEIGHT CONFIGURATIONS
+# =============================================================================
+# V3.3: 5-component scoring weights (frequency, recency, co_purchase, cycle, collaborative)
+# These weights sum to 1.0 and control how each signal influences final score
+
+SEGMENT_WEIGHTS = {
+    'HEAVY': {
+        'frequency': 0.30,
+        'recency': 0.20,
+        'co_purchase': 0.25,
+        'cycle': 0.15,
+        'collaborative': 0.10
+    },
+    'REGULAR': {
+        'frequency': 0.30,
+        'recency': 0.20,
+        'co_purchase': 0.25,
+        'cycle': 0.15,
+        'collaborative': 0.10
+    },
+    'LIGHT': {
+        'frequency': 0.35,
+        'recency': 0.20,
+        'co_purchase': 0.25,
+        'cycle': 0.10,
+        'collaborative': 0.10
+    }
+}
+
+# Collaborative filtering adaptive weight factors
+COLLAB_WEIGHT_SPARSE = 0.5   # Weight multiplier when sparse signals
+COLLAB_WEIGHT_FULL = 1.0     # Weight multiplier when sufficient signals
+
+# Cycle score ranges
+CYCLE_SCORE_DUE_MAX = 1.0       # Max score when product is due
+CYCLE_SCORE_DUE_MIN = 0.6       # Min score in "due" range
+CYCLE_SCORE_OVERDUE_MAX = 0.6   # Max score when overdue
+CYCLE_SCORE_OVERDUE_MIN = 0.3   # Min score when overdue
+CYCLE_SCORE_EARLY_MAX = 0.2     # Max score when too early
+
+# Customer segment thresholds (order counts)
+SEGMENT_THRESHOLD_HEAVY = 500
+SEGMENT_THRESHOLD_REGULAR = 100
+REPURCHASE_RATE_CONSISTENT = 0.40  # Rate to classify as CONSISTENT subsegment
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,6 +127,12 @@ class ImprovedHybridRecommenderV33:
             self.conn = None
             self.owns_connection = True
             self._connect()
+
+        # Detect connection type for SQL placeholder style
+        # pyodbc uses '?', pymssql uses '%s'
+        conn_module = type(self.conn).__module__
+        self._use_pymssql = 'pymssql' in conn_module
+        logger.debug(f"SQL placeholder style: {'%s' if self._use_pymssql else '?'}")
 
         self.redis_client = None
         self.use_cache = use_cache
@@ -140,6 +216,39 @@ class ImprovedHybridRecommenderV33:
         except Exception:
             return self.DictCursorWrapper(self.conn.cursor())
 
+    def _sql(self, query: str) -> str:
+        """
+        Convert SQL placeholder style based on connection type.
+        pyodbc uses '?', pymssql uses '%s'.
+
+        Args:
+            query: SQL query with '?' placeholders
+
+        Returns:
+            Query with placeholders converted for the active connection
+        """
+        if self._use_pymssql:
+            return query.replace('?', '%s')
+        return query
+
+    @contextmanager
+    def _cursor_context(self):
+        """
+        Context manager for cursor handling.
+        Ensures cursors are properly closed after use.
+
+        Usage:
+            with self._cursor_context() as cursor:
+                cursor.execute(query, params)
+                results = cursor.fetchall()
+            # cursor automatically closed here
+        """
+        cursor = self._dict_cursor()
+        try:
+            yield cursor
+        finally:
+            cursor.close()
+
     def _load_ann_neighbors(self) -> Optional[Dict[int, List[Tuple[int, float]]]]:
         """
         Load precomputed ANN neighbors from JSON file.
@@ -198,11 +307,9 @@ class ImprovedHybridRecommenderV33:
           AND Deleted = 0
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(query)
-
-        sellable = {row['ID'] for row in cursor}
-        cursor.close()
+        with self._cursor_context() as cursor:
+            cursor.execute(query)
+            sellable = {row['ID'] for row in cursor}
         return sellable
 
     def classify_customer(self, customer_id: int, as_of_date: str) -> Tuple[str, str]:
@@ -217,15 +324,15 @@ class ImprovedHybridRecommenderV33:
               AND o.Created < ?
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(query, (customer_id, as_of_date))
-        row = cursor.fetchone()
-        orders_before = row['orders_before'] if row else 0
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(query), (customer_id, as_of_date))
+            row = cursor.fetchone()
+            orders_before = row['orders_before'] if row else 0
 
-        if orders_before >= 500:
+        if orders_before >= SEGMENT_THRESHOLD_HEAVY:
             segment = "HEAVY"
             subsegment = None
-        elif orders_before >= 100:
+        elif orders_before >= SEGMENT_THRESHOLD_REGULAR:
             segment = "REGULAR"
 
             repurchase_query = """
@@ -245,20 +352,19 @@ class ImprovedHybridRecommenderV33:
             LEFT JOIN dbo.OrderItem oi ON oi.ProductID = counts.ProductID
             """
 
-            cursor = self._dict_cursor()
-            cursor.execute(repurchase_query, (customer_id, as_of_date))
-            repurchase_row = cursor.fetchone()
+            with self._cursor_context() as cursor:
+                cursor.execute(self._sql(repurchase_query), (customer_id, as_of_date))
+                repurchase_row = cursor.fetchone()
 
             if repurchase_row and repurchase_row['total_products'] > 0:
                 repurchase_rate = repurchase_row['repurchased_products'] / repurchase_row['total_products']
-                subsegment = "CONSISTENT" if repurchase_rate >= 0.40 else "EXPLORATORY"
+                subsegment = "CONSISTENT" if repurchase_rate >= REPURCHASE_RATE_CONSISTENT else "EXPLORATORY"
             else:
                 subsegment = "EXPLORATORY"  # Default to exploratory if no data
         else:
             segment = "LIGHT"
             subsegment = None
 
-        cursor.close()
         return segment, subsegment
 
     def get_customer_products(self, customer_id: int, as_of_date: str, limit: int = 500) -> Set[int]:
@@ -279,11 +385,9 @@ class ImprovedHybridRecommenderV33:
         ) AS RecentProducts
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(query, (customer_id, as_of_date))
-
-        products = {row['ProductID'] for row in cursor}
-        cursor.close()
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(query), (customer_id, as_of_date))
+            products = {row['ProductID'] for row in cursor}
 
         logger.debug(f"Customer {customer_id} has {len(products)} products (limit: {limit})")
         return products
@@ -321,11 +425,9 @@ class ImprovedHybridRecommenderV33:
               AND o.Created < ?
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(query, (customer_id, as_of_date))
-
-        candidate_customers = [row['ClientID'] for row in cursor]
-        cursor.close()
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(query), (customer_id, as_of_date))
+            candidate_customers = [row['ClientID'] for row in cursor]
 
         logger.debug(f"Found {len(candidate_customers)} candidate similar customers")
 
@@ -393,6 +495,19 @@ class ImprovedHybridRecommenderV33:
         return collaborative_scores, len(owned_products)
 
     def get_frequency_score(self, customer_id: int, as_of_date: str) -> Dict[int, float]:
+        """
+        Utility method: Get frequency scores for a customer across ALL their agreements.
+
+        Note: This is a customer-level utility method for analysis/debugging.
+        The main recommendation flow uses agreement-level scoring in get_recommendations_for_agreement().
+
+        Args:
+            customer_id: Customer ID to analyze
+            as_of_date: Cutoff date (YYYY-MM-DD)
+
+        Returns:
+            Dict mapping product_id -> normalized frequency score (0.0-1.0)
+        """
         as_of_date = self._normalize_date(as_of_date)
 
         query = """
@@ -406,21 +521,34 @@ class ImprovedHybridRecommenderV33:
         GROUP BY oi.ProductID
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(query, (customer_id, as_of_date))
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(query), (customer_id, as_of_date))
 
-        scores = {}
-        max_count = 1
-        for row in cursor:
-            scores[row['ProductID']] = row['purchase_count']
-            max_count = max(max_count, row['purchase_count'])
+            scores = {}
+            max_count = 1
+            for row in cursor:
+                scores[row['ProductID']] = row['purchase_count']
+                max_count = max(max_count, row['purchase_count'])
 
         scores = {pid: count / max_count for pid, count in scores.items()}
-
-        cursor.close()
         return scores
 
     def get_recency_score(self, customer_id: int, as_of_date: str) -> Dict[int, float]:
+        """
+        Utility method: Get recency scores for a customer across ALL their agreements.
+
+        Note: This is a customer-level utility method for analysis/debugging.
+        The main recommendation flow uses agreement-level scoring in get_recommendations_for_agreement().
+
+        Uses exponential decay: score = e^(-days_ago / RECENCY_DECAY_DAYS)
+
+        Args:
+            customer_id: Customer ID to analyze
+            as_of_date: Cutoff date (YYYY-MM-DD)
+
+        Returns:
+            Dict mapping product_id -> recency score (0.0-1.0)
+        """
         as_of_date = self._normalize_date(as_of_date)
 
         query = """
@@ -434,20 +562,18 @@ class ImprovedHybridRecommenderV33:
         GROUP BY oi.ProductID
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(query, (customer_id, as_of_date))
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(query), (customer_id, as_of_date))
 
-        as_of_datetime = datetime.strptime(as_of_date, '%Y-%m-%d')
-        scores = {}
+            as_of_datetime = datetime.strptime(as_of_date, '%Y-%m-%d')
+            scores = {}
 
-        for row in cursor:
-            last_purchase = row['last_purchase']
-            days_ago = (as_of_datetime - last_purchase).days
+            for row in cursor:
+                last_purchase = row['last_purchase']
+                days_ago = (as_of_datetime - last_purchase).days
+                score = math.e ** (-days_ago / RECENCY_DECAY_DAYS)
+                scores[row['ProductID']] = score
 
-            score = 2.718 ** (-days_ago / 90)
-            scores[row['ProductID']] = score
-
-        cursor.close()
         return scores
 
     def get_product_groups(self, product_ids: List[int]) -> Dict[int, int]:
@@ -480,7 +606,7 @@ class ImprovedHybridRecommenderV33:
         logger.debug(f"Found product groups for {len(groups)}/{len(product_ids)} products")
         return groups
 
-    def apply_diversity_filter(self, recommendations: List[Dict], max_per_group: int = 3) -> List[Dict]:
+    def apply_diversity_filter(self, recommendations: List[Dict], max_per_group: int = MAX_PRODUCTS_PER_GROUP) -> List[Dict]:
         if not recommendations:
             return recommendations
 
@@ -515,17 +641,15 @@ class ImprovedHybridRecommenderV33:
         ORDER BY Created DESC
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(query, (customer_id,))
-
-        agreement_ids = [row['AgreementID'] for row in cursor]
-        cursor.close()
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(query), (customer_id,))
+            agreement_ids = [row['AgreementID'] for row in cursor]
 
         logger.debug(f"Customer {customer_id} has {len(agreement_ids)} agreements")
         return agreement_ids
 
     def get_co_purchase_scores(self, agreement_id: int, product_ids: List[int],
-                               as_of_date: str, days_window: int = 180) -> Dict[int, float]:
+                               as_of_date: str, days_window: int = CO_PURCHASE_WINDOW_DAYS) -> Dict[int, float]:
         """
         V3.3 FEATURE: Co-purchase scoring
         Products frequently bought TOGETHER in the same order get higher scores.
@@ -599,7 +723,7 @@ class ImprovedHybridRecommenderV33:
             agreement_id, as_of_date, days_window, as_of_date,  # CoOccurrence
             agreement_id, as_of_date, days_window, as_of_date   # TotalOrders
         )
-        cursor.execute(query, params)
+        cursor.execute(self._sql(query), params)
 
         scores = {}
         for row in cursor:
@@ -609,13 +733,13 @@ class ImprovedHybridRecommenderV33:
         try:
             cursor_total = self._dict_cursor()
             cursor_total.execute(
-                """
+                self._sql("""
                 SELECT COUNT(DISTINCT ID) as total_orders
                 FROM dbo.[Order]
                 WHERE ClientAgreementID = ?
                   AND Created < ?
                   AND Created >= DATEADD(day, -?, ?)
-                """,
+                """),
                 (agreement_id, as_of_date, days_window, as_of_date)
             )
             row = cursor_total.fetchone()
@@ -693,7 +817,7 @@ class ImprovedHybridRecommenderV33:
         """
 
         cursor = self._dict_cursor()
-        cursor.execute(query, (agreement_id, as_of_date, as_of_date))
+        cursor.execute(self._sql(query), (agreement_id, as_of_date, as_of_date))
 
         scores = {}
         as_of_datetime = datetime.strptime(as_of_date, '%Y-%m-%d')
@@ -705,26 +829,28 @@ class ImprovedHybridRecommenderV33:
             days_since = row['days_since_last']
 
             # V3.3 BUG FIX: Skip products with very short or zero cycles
-            # A cycle of < 3 days doesn't make sense for reorder detection
-            if avg_cycle < 3:
+            # A cycle of < MIN_CYCLE_DAYS days doesn't make sense for reorder detection
+            if avg_cycle < MIN_CYCLE_DAYS:
                 scores[product_id] = 0.0
                 continue
 
             # Calculate how close we are to the expected reorder date
             deviation = abs(days_since - avg_cycle)
-            tolerance = max(7, variance * 0.5)  # At least 7 days tolerance
+            tolerance = max(CYCLE_TOLERANCE_MIN_DAYS, variance * 0.5)
 
             if deviation <= tolerance:
-                # Due soon - high score
-                score = 1.0 - (deviation / tolerance) * 0.4  # 0.6-1.0 range
+                # Due soon - high score (CYCLE_SCORE_DUE_MIN to CYCLE_SCORE_DUE_MAX range)
+                score_range = CYCLE_SCORE_DUE_MAX - CYCLE_SCORE_DUE_MIN
+                score = CYCLE_SCORE_DUE_MAX - (deviation / tolerance) * score_range
             elif days_since > avg_cycle:
-                # Overdue - medium score, decaying with time
+                # Overdue - medium score, decaying with time (CYCLE_SCORE_OVERDUE_MIN to CYCLE_SCORE_OVERDUE_MAX range)
                 overdue_days = days_since - avg_cycle
-                score = max(0.3, 0.6 - (overdue_days / avg_cycle) * 0.3)  # 0.3-0.6 range
+                score_range = CYCLE_SCORE_OVERDUE_MAX - CYCLE_SCORE_OVERDUE_MIN
+                score = max(CYCLE_SCORE_OVERDUE_MIN, CYCLE_SCORE_OVERDUE_MAX - (overdue_days / avg_cycle) * score_range)
             else:
-                # Too early - low score
+                # Too early - low score (0 to CYCLE_SCORE_EARLY_MAX range)
                 too_early_days = avg_cycle - days_since
-                score = max(0.0, 0.2 - (too_early_days / avg_cycle) * 0.2)  # 0.0-0.2 range
+                score = max(0.0, CYCLE_SCORE_EARLY_MAX - (too_early_days / avg_cycle) * CYCLE_SCORE_EARLY_MAX)
 
             scores[product_id] = float(score)
 
@@ -737,7 +863,7 @@ class ImprovedHybridRecommenderV33:
         as_of_date = self._normalize_date(as_of_date)
         cursor = self._dict_cursor()
 
-        cursor.execute("SELECT ClientID FROM dbo.ClientAgreement WHERE ID = ?", (agreement_id,))
+        cursor.execute(self._sql("SELECT ClientID FROM dbo.ClientAgreement WHERE ID = ?"), (agreement_id,))
         result = cursor.fetchone()
         cursor.close()
 
@@ -755,15 +881,15 @@ class ImprovedHybridRecommenderV33:
         """
 
         cursor = self._dict_cursor()
-        cursor.execute(segment_query, (agreement_id, as_of_date))
+        cursor.execute(self._sql(segment_query), (agreement_id, as_of_date))
         row = cursor.fetchone()
         cursor.close()
         orders_before = row['orders_before'] if row else 0
 
-        if orders_before >= 500:
+        if orders_before >= SEGMENT_THRESHOLD_HEAVY:
             segment = "HEAVY"
             subsegment = None
-        elif orders_before >= 100:
+        elif orders_before >= SEGMENT_THRESHOLD_REGULAR:
             segment = "REGULAR"
             subsegment = "CONSISTENT"
         else:
@@ -783,7 +909,7 @@ class ImprovedHybridRecommenderV33:
         """
 
         cursor = self._dict_cursor()
-        cursor.execute(frequency_query, (agreement_id, as_of_date))
+        cursor.execute(self._sql(frequency_query), (agreement_id, as_of_date))
 
         frequency_scores = {}
         max_count = 1
@@ -805,7 +931,7 @@ class ImprovedHybridRecommenderV33:
         """
 
         cursor = self._dict_cursor()
-        cursor.execute(recency_query, (agreement_id, as_of_date))
+        cursor.execute(self._sql(recency_query), (agreement_id, as_of_date))
 
         as_of_datetime = datetime.strptime(as_of_date, '%Y-%m-%d')
         recency_scores = {}
@@ -813,7 +939,7 @@ class ImprovedHybridRecommenderV33:
         for row in cursor:
             last_purchase = row['last_purchase']
             days_ago = (as_of_datetime - last_purchase).days
-            score = 2.718 ** (-days_ago / 90)
+            score = math.e ** (-days_ago / RECENCY_DECAY_DAYS)
             recency_scores[row['ProductID']] = score
 
         cursor.close()
@@ -843,43 +969,18 @@ class ImprovedHybridRecommenderV33:
         else:
             collaborative_scores, similar_count = {}, 0
 
-        # V3.3 FIXED WEIGHTS: Added collaborative filtering as 5th feature
-        # Old V3.2: freq=50-70%, recency=25-35%
-        # Old V3.3 (broken): freq=35%, recency=20%, co-purchase=30%, cycle=15%
-        # New V3.3 (fixed): freq=30%, recency=20%, co-purchase=25%, cycle=15%, collaborative=10%
-        if segment == "HEAVY":
-            v3_weights = {
-                'frequency': 0.30,     # reduced from 0.35
-                'recency': 0.20,
-                'co_purchase': 0.25,   # reduced from 0.30
-                'cycle': 0.15,
-                'collaborative': 0.10  # NEW - discovery from similar customers
-            }
-        elif segment == "REGULAR":
-            v3_weights = {
-                'frequency': 0.30,     # reduced from 0.35
-                'recency': 0.20,
-                'co_purchase': 0.25,   # reduced from 0.30
-                'cycle': 0.15,
-                'collaborative': 0.10  # NEW - discovery from similar customers
-            }
-        else:  # LIGHT
-            v3_weights = {
-                'frequency': 0.35,     # reduced from 0.40
-                'recency': 0.20,       # reduced from 0.25
-                'co_purchase': 0.25,   # unchanged
-                'cycle': 0.10,         # unchanged
-                'collaborative': 0.10  # NEW - more important for customers with less history
-            }
+        # V3.3 FIXED WEIGHTS: Use segment-specific weights from SEGMENT_WEIGHTS constant
+        # 5 components: frequency, recency, co_purchase, cycle, collaborative
+        v3_weights = SEGMENT_WEIGHTS.get(segment, SEGMENT_WEIGHTS['LIGHT']).copy()
 
         # Adaptive collaborative weight: downweight when sparse signals
         collab_count = len([s for s in collaborative_scores.values() if s > 0])
         if similar_count == 0 or collab_count == 0:
             collab_factor = 0.0
         elif similar_count < COLLAB_SPARSE_CUSTOMERS or collab_count < COLLAB_SPARSE_PRODUCTS:
-            collab_factor = 0.5
+            collab_factor = COLLAB_WEIGHT_SPARSE
         else:
-            collab_factor = 1.0
+            collab_factor = COLLAB_WEIGHT_FULL
 
         v3_weights['collaborative'] *= collab_factor
 
@@ -1017,7 +1118,7 @@ class ImprovedHybridRecommenderV33:
         """
 
         cursor = self._dict_cursor()
-        cursor.execute(query, (as_of_date, lookback, as_of_date))
+        cursor.execute(self._sql(query), (as_of_date, lookback, as_of_date))
         rows = cursor.fetchall()
         cursor.close()
 

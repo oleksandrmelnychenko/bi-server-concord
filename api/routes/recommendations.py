@@ -1,7 +1,22 @@
+"""
+DEPRECATED: This module contains the legacy LightFM-based recommendation route.
+
+This router is NOT registered in the main application (api/main.py).
+Production recommendations are handled by ImprovedHybridRecommenderV33 in api/main.py.
+
+The V3.3 Hybrid Recommender (75.4% precision@50) replaced this LightFM implementation.
+This file is kept for reference purposes only.
+
+To use the production recommendation API:
+    GET /recommendations/{customer_id}  - Returns weekly recommendations (V3.3 Hybrid)
+
+See: scripts/improved_hybrid_recommender_v33.py for the production algorithm.
+"""
+
 from fastapi import APIRouter, HTTPException, Path, Body
 from datetime import datetime
 import logging
-from pathlib import Path as FilePath
+import warnings
 
 from api.models.recommendation_schemas import (
     RecommendationRequest,
@@ -17,6 +32,14 @@ except ImportError:
     LightFMRecommender = None
 
 logger = logging.getLogger(__name__)
+
+# Emit deprecation warning if this module is imported
+warnings.warn(
+    "api.routes.recommendations is deprecated. "
+    "Use the /recommendations/{customer_id} endpoint in api/main.py instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 router = APIRouter(prefix="/api/v1/recommendations", tags=["recommendations"])
 
