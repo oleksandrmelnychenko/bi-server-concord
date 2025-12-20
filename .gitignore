@@ -55,4 +55,6 @@ dump.rdb
 
 # ChromaDB (large vector database files)
 db-ai-api/chroma_db/
+db-ai-api/chroma_db_*/
 **/chroma_db/
+**/chroma_db_*/
