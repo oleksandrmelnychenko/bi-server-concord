@@ -1,125 +1,84 @@
 import type { QueryType } from '../types';
 
-// Extract product search keyword from query
-export function extractProductKeyword(query: string): string | null {
-  const patterns = [
-    /товар[иі]?\s+(?:із|з|with|містять?|де є|які мають)\s+[«"]?(\w+)[»"]?/i,
-    /(?:із|з)\s+(\w+)\s+товар/i,
-    /(?:виведи|покажи|знайди)\s+.*товар.*\s+(\w+)/i,
-    /товар.*\s+(\w+)$/i,
-    /продукт[иі]?\s+(?:із|з|with)\s+[«"]?(\w+)[»"]?/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = query.match(pattern);
-    if (match && match[1] && match[1].length >= 2) {
-      return match[1];
-    }
-  }
-  return null;
-}
-
-// Extract number from query
+// Extract number from query (e.g., "top 5" -> 5)
 export function extractNumber(text: string): number | null {
   const match = text.match(/\d+/);
   return match ? parseInt(match[0], 10) : null;
 }
 
-// Detect query type
-export function detectQueryType(query: string): QueryType {
-  const lowerQuery = query.toLowerCase();
+// Extract product search keyword - kept for potential future use
+export function extractProductKeyword(query: string): string | null {
+  const match = query.match(/товар(?:ів|и)?\s+(?:з|із)\s+(\w+)/i);
+  return match?.[1] || null;
+}
 
-  // Product keyword search (e.g., "товари із SEM", "покажи товари з SEM")
-  const productKeyword = extractProductKeyword(query);
-  if (productKeyword && (lowerQuery.includes('товар') || lowerQuery.includes('продукт'))) {
-    return 'product_keyword_search';
-  }
-
-  // Superlative keywords for "best/most" queries
-  const hasSuperlative =
-    lowerQuery.includes('найбільше') ||
-    lowerQuery.includes('найдорожче') ||
-    lowerQuery.includes('найкращ') ||
-    lowerQuery.includes('найбільш') ||
-    lowerQuery.includes('найменше') ||
-    lowerQuery.includes('найдешевш') ||
-    lowerQuery.includes('більше всього') ||
-    lowerQuery.includes('найпопулярн');
-
-  const hasClientKeyword =
-    lowerQuery.includes('клієнт') ||
-    lowerQuery.includes('покупець') ||
-    lowerQuery.includes('замовник') ||
-    lowerQuery.includes('хто купив');
-
-  const hasProductKeyword =
-    lowerQuery.includes('товар') ||
-    lowerQuery.includes('продукт') ||
-    lowerQuery.includes('що продали') ||
-    lowerQuery.includes('що купили');
-
-  // Best/most clients queries
-  if (hasSuperlative && hasClientKeyword) {
-    return 'top_clients';
-  }
-
-  // Best/most products queries
-  if (hasSuperlative && hasProductKeyword) {
-    return 'top_products';
-  }
-
-  // General superlative without specific context - check for buying context
-  if (hasSuperlative && (lowerQuery.includes('купив') || lowerQuery.includes('купували'))) {
-    return 'top_clients';
-  }
-
-  // Sales/Analytics queries
-  if (
-    lowerQuery.includes('продаж') ||
-    lowerQuery.includes('продали') ||
-    lowerQuery.includes('скільки') ||
-    lowerQuery.includes('по роках') ||
-    lowerQuery.includes('за рік') ||
-    lowerQuery.includes('yearly')
-  ) {
-    return 'sales';
-  }
-
-  // Product queries
-  if (lowerQuery.includes('топ') && (lowerQuery.includes('товар') || lowerQuery.includes('продукт'))) {
-    return 'top_products';
-  }
-
-  // Client queries
-  if (lowerQuery.includes('топ') && lowerQuery.includes('клієнт')) {
-    return 'top_clients';
-  }
-
-  // Debt queries
-  if (
-    lowerQuery.includes('борг') ||
-    lowerQuery.includes('заборгованість') ||
-    lowerQuery.includes('debt')
-  ) {
-    return 'debts';
-  }
-
-  // Region queries
-  if (
-    lowerQuery.includes('регіон') ||
-    lowerQuery.includes('область') ||
-    lowerQuery.includes('київ') ||
-    lowerQuery.includes('хмельниц') ||
-    lowerQuery.includes('львів') ||
-    lowerQuery.includes('одес')
-  ) {
-    return 'region';
-  }
-
-  // Client search
-  if (lowerQuery.includes('клієнт') && !lowerQuery.includes('топ')) {
-    return 'client_search';
-  }
-
+// All queries go to Ollama SQL agent
+export function detectQueryType(_query: string): QueryType {
   return 'search';
+}
+
+// Detect if query should show a region map
+export function isRegionMapQuery(query: string): boolean {
+  const q = query.toLowerCase();
+
+  // Patterns that suggest region-based visualization
+  const regionPatterns = [
+    /по\s+регіонах/i,
+    /за\s+регіонами/i,
+    /регіон/i,
+    /област/i,
+    /карта/i,
+    /map/i,
+    /by\s+region/i,
+    /per\s+region/i,
+    /geography/i,
+  ];
+
+  return regionPatterns.some((pattern) => pattern.test(q));
+}
+
+// Detect if query mentions specific region names
+export function extractRegionFromQuery(query: string): string | null {
+  const q = query.toLowerCase();
+
+  const regionMap: Record<string, string> = {
+    'київ': 'KI',
+    'kyiv': 'KI',
+    'львів': 'LV',
+    'lviv': 'LV',
+    'одеса': 'OD',
+    'odesa': 'OD',
+    'харк': 'XV',
+    'khark': 'XV',
+    'дніпро': 'DP',
+    'dnipro': 'DP',
+    'хмельницьк': 'XM',
+    'khmelnytsk': 'XM',
+  };
+
+  for (const [name, code] of Object.entries(regionMap)) {
+    if (q.includes(name)) {
+      return code;
+    }
+  }
+
+  return null;
+}
+
+// Check if result data contains region information
+export function hasRegionData(rows: Record<string, unknown>[]): boolean {
+  if (!rows || rows.length === 0) return false;
+
+  const firstRow = rows[0];
+  const keys = Object.keys(firstRow).map((k) => k.toLowerCase());
+
+  return keys.some((k) =>
+    k.includes('region') ||
+    k.includes('регіон') ||
+    k.includes('oblast') ||
+    k === 'regioncode' ||
+    k === 'region_code' ||
+    k === 'regionid' ||
+    k === 'region_id'
+  );
 }

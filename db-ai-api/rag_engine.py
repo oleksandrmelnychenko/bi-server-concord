@@ -16,10 +16,10 @@ class RAGQueryEngine:
     """RAG query engine with Ukrainian support."""
 
     def __init__(self,
-                 embedding_model: str = "intfloat/multilingual-e5-large",
-                 llm_model: str = "qwen2:7b",
-                 chroma_dir: str = "chroma_db",
-                 collection_name: str = "concorddb_ukrainian",
+                 embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2",
+                 llm_model: str = "qwen2.5:14b",
+                 chroma_dir: str = "chroma_db_full",
+                 collection_name: str = "concorddb_full",
                  system_prompt_path: str = "prompts/system_prompt_uk.txt"):
         """
         Initialize RAG Query Engine.
@@ -32,16 +32,24 @@ class RAGQueryEngine:
             system_prompt_path: Path to system prompt
         """
         print("\n" + "="*60)
-        print("🚀 INITIALIZING RAG QUERY ENGINE")
+        print("INITIALIZING RAG QUERY ENGINE")
         print("="*60 + "\n")
 
+        embedding_model = os.getenv("RAG_EMBEDDING_MODEL", embedding_model)
+        chroma_dir = os.getenv("RAG_CHROMA_DIR", chroma_dir)
+        collection_name = os.getenv("RAG_COLLECTION_NAME", collection_name)
+
+        self.embedding_model_name = embedding_model
+        self.collection_name = collection_name
+        self.chroma_dir = chroma_dir
+
         # Load embedding model
-        print(f"📦 Loading embedding model: {embedding_model}")
+        print(f"Loading embedding model: {embedding_model}")
         self.embedding_model = SentenceTransformer(embedding_model)
-        print(f"✓ Embedding model loaded")
+        print(f"[OK] Embedding model loaded")
 
         # Connect to ChromaDB
-        print(f"\n💾 Connecting to ChromaDB: {chroma_dir}")
+        print(f"\nConnecting to ChromaDB: {chroma_dir}")
         self.chroma_client = chromadb.PersistentClient(
             path=chroma_dir,
             settings=Settings(anonymized_telemetry=False)
@@ -51,23 +59,25 @@ class RAGQueryEngine:
         try:
             self.collection = self.chroma_client.get_collection(name=collection_name)
             doc_count = self.collection.count()
-            print(f"✓ Loaded collection: {collection_name}")
+            print(f"[OK] Loaded collection: {collection_name}")
             print(f"  Documents: {doc_count}")
         except Exception as e:
-            print(f"✗ Error loading collection: {e}")
+            print(f"[ERROR] Error loading collection: {e}")
             raise
+
+        self._validate_embedding_dimension()
 
         # Set LLM model
         self.llm_model = llm_model
-        print(f"\n🤖 LLM Model: {llm_model}")
+        print(f"\nLLM Model: {llm_model}")
 
         # Load system prompt
         self.system_prompt_template = self._load_system_prompt(system_prompt_path)
-        print(f"✓ Loaded system prompt from: {system_prompt_path}")
+        print(f"[OK] Loaded system prompt from: {system_prompt_path}")
 
         # Load schema description
         self.schema_description = self._load_schema_description()
-        print(f"✓ Loaded schema description\n")
+        print(f"[OK] Loaded schema description\n")
 
     def _load_system_prompt(self, path: str) -> str:
         """Load system prompt template."""
@@ -101,6 +111,36 @@ class RAGQueryEngine:
             return description
         except:
             return "База даних ConcordDb"
+
+    def _get_collection_embedding_dimension(self) -> Optional[int]:
+        try:
+            sample = self.collection.get(limit=1, include=["embeddings"])
+        except Exception as exc:
+            print(f"[WARN] Failed to read collection embeddings: {exc}")
+            return None
+
+        embeddings = sample.get("embeddings")
+        if embeddings is None or len(embeddings) == 0 or embeddings[0] is None:
+            return None
+
+        try:
+            return len(embeddings[0])
+        except Exception:
+            return None
+
+    def _validate_embedding_dimension(self) -> None:
+        model_dim = self.embedding_model.get_sentence_embedding_dimension()
+        collection_dim = self._get_collection_embedding_dimension()
+        if collection_dim is None:
+            return
+        if collection_dim != model_dim:
+            raise ValueError(
+                f"Embedding dimension mismatch: collection '{self.collection_name}' "
+                f"({self.chroma_dir}) has {collection_dim}, model "
+                f"'{self.embedding_model_name}' has {model_dim}. "
+                "Reindex the collection or set RAG_EMBEDDING_MODEL/RAG_COLLECTION_NAME to match."
+            )
+
 
     def search(self, query: str, n_results: int = 5) -> Dict[str, Any]:
         """
@@ -262,7 +302,7 @@ class RAGQueryEngine:
         """Get engine statistics."""
         return {
             "collection_documents": self.collection.count(),
-            "embedding_model": "multilingual-e5-large",
+            "embedding_model": self.embedding_model_name,
             "llm_model": self.llm_model,
             "embedding_dimension": self.embedding_model.get_sentence_embedding_dimension()
         }
@@ -285,7 +325,7 @@ def main():
 
     # Query
     print("\n" + "="*60)
-    print("🔍 QUERYING RAG ENGINE")
+    print("QUERYING RAG ENGINE")
     print("="*60)
     print(f"Query: {args.query}\n")
 
@@ -297,7 +337,7 @@ def main():
 
     # Print results
     print("="*60)
-    print("📝 ANSWER")
+    print("ANSWER")
     print("="*60)
     print(f"Language: {result['language']}")
     print(f"Success: {result['success']}")

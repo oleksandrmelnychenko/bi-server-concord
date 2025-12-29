@@ -46,7 +46,11 @@ chroma_client = chromadb.PersistentClient(
     path=str(db_path),
     settings=ChromaSettings(anonymized_telemetry=False),
 )
-collection = chroma_client.get_collection(name="tables_ConcordDb_v5")
+
+
+def get_table_collection():
+    """Get the table collection (fresh reference to avoid stale collection issues)."""
+    return chroma_client.get_collection(name="tables_ConcordDb_v5")
 
 
 class QueryRequest(BaseModel):
@@ -77,6 +81,7 @@ def get_db_connection():
 
 def find_relevant_tables(question: str, top_k: int = 10) -> List[Dict]:
     """Find relevant tables using ChromaDB."""
+    collection = get_table_collection()
     results = collection.query(query_texts=[question], n_results=top_k)
 
     relevant_tables = []
@@ -99,8 +104,10 @@ def build_context(tables: List[Dict]) -> str:
         # Build column list (showing first 10 columns to keep prompt small)
         col_list = ', '.join([f"{c['name']} ({c['type']})" for c in table['columns'][:10]])
 
+        # Handle both 'full_name' and 'name' schema formats
+        table_name = table.get('full_name') or table.get('name', 'unknown')
         parts = [
-            f"Table: {table['full_name']}",
+            f"Table: dbo.[{table_name}]",
             f"Columns: {col_list}"
         ]
 
@@ -188,8 +195,13 @@ SELECT"""
         sql = sql.replace(' LIMIT ', ' TOP ').replace('LIMIT ', 'TOP ')
         sql = sql.replace(' NULLS LAST', '').replace(' NULLS FIRST', '')
 
-        # Fix TOP placement if it's at the end (should be after SELECT)
+        # Fix reserved word 'Order' - escape with brackets
         import re
+        sql = re.sub(r'\bdbo\.Order\b(?!\])', 'dbo.[Order]', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'\bFROM\s+Order\b(?!\])', 'FROM [Order]', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'\bJOIN\s+Order\b(?!\])', 'JOIN [Order]', sql, flags=re.IGNORECASE)
+
+        # Fix TOP placement if it's at the end (should be after SELECT)
         # Pattern: SELECT ... TOP N (wrong placement)
         top_at_end = re.search(r'(SELECT\s+.*?)\s+TOP\s+(\d+)\s*$', sql, re.IGNORECASE)
         if top_at_end:
@@ -317,6 +329,7 @@ async def get_schema():
 @app.get("/tables/search")
 async def search_tables(query: str, top_k: int = 5):
     """Semantic table search."""
+    collection = get_table_collection()
     results = collection.query(query_texts=[query], n_results=top_k)
 
     tables = []

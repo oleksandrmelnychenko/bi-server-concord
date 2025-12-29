@@ -14,9 +14,9 @@ from datetime import datetime
 
 # Configuration
 INPUT_FILE = "data/all_documents.json"
-CHROMA_DIR = "chroma_db_full"
-COLLECTION_NAME = "concorddb_full"
-MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+CHROMA_DIR = os.getenv("RAG_CHROMA_DIR", "chroma_db_full")
+COLLECTION_NAME = os.getenv("RAG_COLLECTION_NAME", "concorddb_full")
+MODEL_NAME = os.getenv("RAG_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
 BATCH_SIZE = 128
 SAVE_EVERY = 1000
 

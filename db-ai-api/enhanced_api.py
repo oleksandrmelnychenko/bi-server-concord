@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any, Literal
 import json
+import os
 from pathlib import Path
 
 # Import existing components
@@ -48,6 +49,10 @@ _hybrid_agent = None
 _rag_engine = None
 _embedder = None
 
+SQL_MODEL = "qwen2.5:14b"
+RAG_MODEL = "qwen2.5:14b"
+RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+
 
 def get_hybrid_agent() -> HybridAgent:
     """Lazy load hybrid agent."""
@@ -55,8 +60,8 @@ def get_hybrid_agent() -> HybridAgent:
     if _hybrid_agent is None:
         print("Initializing Hybrid Agent...")
         _hybrid_agent = HybridAgent(
-            sql_model="qwen2:7b",
-            rag_model="qwen2:7b"
+            sql_model=SQL_MODEL,
+            rag_model=RAG_MODEL
         )
     return _hybrid_agent
 
@@ -66,7 +71,7 @@ def get_rag_engine() -> RAGQueryEngine:
     global _rag_engine
     if _rag_engine is None:
         print("Initializing RAG Engine...")
-        _rag_engine = RAGQueryEngine(llm_model="qwen2:7b")
+        _rag_engine = RAGQueryEngine(llm_model=RAG_MODEL)
     return _rag_engine
 
 
@@ -96,15 +101,9 @@ class HybridQueryRequest(BaseModel):
     n_results: int = 5
 
 
-class RAGQueryRequest(BaseModel):
+class WebQueryRequest(BaseModel):
     question: str
-    n_results: int = 5
-    return_context: bool = False
-
-
-class SearchRequest(BaseModel):
-    query: str
-    n_results: int = 5
+    mode: Optional[Literal["sql", "rag", "auto"]] = "auto"
 
 
 # ============================================================================
@@ -118,8 +117,8 @@ async def root():
         "version": "2.0.0",
         "status": "running",
         "database": DB_NAME,
-        "sql_model": "sqlcoder:7b",
-        "rag_model": "qwen2:7b",
+        "sql_model": SQL_MODEL,
+        "rag_model": RAG_MODEL,
         "tables": len(SCHEMA_CACHE.get('tables', {})),
         "views": len(SCHEMA_CACHE.get('views', {})),
         "features": {
@@ -146,37 +145,7 @@ async def health():
         raise HTTPException(status_code=503, detail=str(e))
 
 
-@app.post("/query")
-async def query_database(request: QueryRequest):
-    """Original Text-to-SQL endpoint (backward compatible)."""
-    try:
-        # Find relevant tables
-        relevant_tables = find_relevant_tables(request.question, top_k=5)
-
-        # Build context
-        context = build_context(relevant_tables)
-
-        # Generate SQL
-        sql = generate_sql(request.question, context)
-
-        # Build response
-        response = {
-            "question": request.question,
-            "sql": sql,
-            "explanation": None
-        }
-
-        # Execute if requested
-        if request.execute:
-            execution_result = execute_sql(sql, request.max_rows)
-            response["execution"] = execution_result
-        else:
-            response["execution"] = {"message": "SQL generated but not executed"}
-
-        return response
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# Legacy /query endpoint removed - use /hybrid/query instead
 
 
 @app.get("/schema")
@@ -219,44 +188,46 @@ async def hybrid_query(request: HybridQueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/rag/query")
-async def rag_query(request: RAGQueryRequest):
+@app.post("/web/query")
+async def web_query(request: WebQueryRequest):
     """
-    Pure RAG query endpoint - semantic search + answer generation.
+    Website query endpoint - returns a stable response shape for UI clients.
     """
     try:
-        engine = get_rag_engine()
+        agent = get_hybrid_agent()
+        mode = None if request.mode == "auto" else request.mode
 
-        result = engine.query(
+        result = agent.query(
             question=request.question,
-            n_results=request.n_results,
-            return_context=request.return_context
+            mode=mode
         )
 
-        return result
+        response: Dict[str, Any] = {
+            "question": request.question,
+            "mode": result.get("mode"),
+            "success": result.get("success", False),
+            "answer": result.get("answer"),
+            "sql": result.get("sql"),
+            "execution": None,
+            "error": result.get("error")
+        }
 
+        if result.get("mode") == "sql":
+            rows = result.get("results") or []
+            columns = list(rows[0].keys()) if rows else []
+            execution: Dict[str, Any] = {
+                "success": result.get("success", False),
+                "rows": rows,
+                "columns": columns,
+                "row_count": result.get("row_count", len(rows))
+            }
+            if result.get("error"):
+                execution["error"] = result.get("error")
+            response["execution"] = execution
+
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/rag/search")
-async def rag_search(request: SearchRequest):
-    """
-    Semantic search in RAG database - returns relevant documents.
-    """
-    try:
-        engine = get_rag_engine()
-
-        result = engine.search(
-            query=request.query,
-            n_results=request.n_results
-        )
-
-        return result
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 # ============================================================================
 # Endpoints - System Management
@@ -273,9 +244,9 @@ async def get_stats():
                 "views": len(SCHEMA_CACHE.get('views', {}))
             },
             "models": {
-                "sql_model": "sqlcoder:7b",
-                "rag_model": "qwen2:7b",
-                "embedding_model": "multilingual-e5-large"
+                "sql_model": SQL_MODEL,
+                "rag_model": RAG_MODEL,
+                "embedding_model": RAG_EMBEDDING_MODEL
             }
         }
 
@@ -301,6 +272,112 @@ async def detect_query_language(query: str):
         "detected_language": language,
         "has_ukrainian": has_uk
     }
+
+
+@app.get("/regions/stats")
+async def get_region_stats():
+    """Get client counts and sales statistics by region."""
+    try:
+        sql = """
+        SELECT
+            r.Name as RegionCode,
+            COUNT(DISTINCT c.ID) as ClientCount,
+            COALESCE(SUM(oi.Qty * oi.PricePerItem), 0) as TotalSales,
+            COALESCE(SUM(oi.Qty), 0) as TotalQty
+        FROM dbo.Region r
+        LEFT JOIN dbo.Client c ON c.RegionID = r.ID AND c.Deleted = 0
+        LEFT JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID
+        LEFT JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID
+        LEFT JOIN dbo.OrderItem oi ON oi.OrderID = o.ID
+        WHERE r.Deleted = 0
+        GROUP BY r.Name
+        ORDER BY ClientCount DESC
+        """
+
+        result = execute_sql(sql)
+
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Failed to fetch region stats"))
+
+        # Map region codes to full names
+        region_names = {
+            "KI": "Київ",
+            "XM": "Хмельницький",
+            "LV": "Львів",
+            "OD": "Одеса",
+            "XV": "Харків",
+            "DP": "Дніпро",
+        }
+
+        regions = []
+        for row in result.get("rows", []):
+            code = row.get("RegionCode", "")
+            regions.append({
+                "region_code": code,
+                "region_name": region_names.get(code, code),
+                "client_count": row.get("ClientCount", 0),
+                "total_sales": float(row.get("TotalSales", 0)),
+                "total_qty": float(row.get("TotalQty", 0)),
+            })
+
+        return {
+            "success": True,
+            "regions": regions,
+            "total_regions": len(regions),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.get("/managers/stats")
+async def get_manager_stats():
+    """Get client counts by manager (User table via Client.MainManagerID)."""
+    try:
+        sql = """
+        SELECT TOP 20
+            u.ID as ManagerID,
+            u.FirstName,
+            u.LastName,
+            ur.Name as Role,
+            COUNT(c.ID) as ClientCount
+        FROM dbo.[User] u
+        LEFT JOIN dbo.Client c ON c.MainManagerID = u.ID AND c.Deleted = 0
+        LEFT JOIN dbo.UserRole ur ON u.UserRoleID = ur.ID
+        WHERE u.Deleted = 0 AND u.IsActive = 1
+        GROUP BY u.ID, u.FirstName, u.LastName, ur.Name
+        HAVING COUNT(c.ID) > 0
+        ORDER BY ClientCount DESC
+        """
+
+        result = execute_sql(sql)
+
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Failed to fetch manager stats"))
+
+        managers = []
+        for row in result.get("rows", []):
+            managers.append({
+                "manager_id": row.get("ManagerID"),
+                "first_name": row.get("FirstName", ""),
+                "last_name": row.get("LastName", ""),
+                "role": row.get("Role", ""),
+                "client_count": row.get("ClientCount", 0),
+            })
+
+        return {
+            "success": True,
+            "managers": managers,
+            "total_managers": len(managers)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================
@@ -363,23 +440,23 @@ async def trigger_embedding():
 if __name__ == "__main__":
     import uvicorn
     print("\n" + "="*60)
-    print("🚀 DB AI API - Hybrid SQL + RAG")
+    print("DB AI API - Hybrid SQL + RAG")
     print("="*60)
     print(f"Database: {DB_NAME}")
     print(f"Tables: {len(SCHEMA_CACHE.get('tables', {}))}")
-    print(f"SQL Model: sqlcoder:7b")
-    print(f"RAG Model: qwen2:7b")
-    print(f"Embedding: multilingual-e5-large")
-    print("\n✨ Features:")
+    print(f"SQL Model: {SQL_MODEL}")
+    print(f"RAG Model: {RAG_MODEL}")
+    print(f"Embedding: {RAG_EMBEDDING_MODEL}")
+    print("\nFeatures:")
     print("  - Text-to-SQL queries")
     print("  - RAG semantic search")
     print("  - Hybrid query routing")
     print("  - Ukrainian language support")
-    print("\n🌐 Endpoints:")
+    print("\nEndpoints:")
     print("  API: http://localhost:8000")
     print("  Docs: http://localhost:8000/docs")
     print("  Health: http://localhost:8000/health")
-    print("\n📚 New Endpoints:")
+    print("\nNew Endpoints:")
     print("  /hybrid/query - Automatic SQL or RAG routing")
     print("  /rag/query - Pure RAG queries")
     print("  /rag/search - Semantic search")

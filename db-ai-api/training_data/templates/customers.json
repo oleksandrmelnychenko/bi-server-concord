@@ -6,7 +6,8 @@
     "ClientAgreement",
     "Sale",
     "Order",
-    "Debt"
+    "Debt",
+    "Bank"
   ],
   "examples": [
     {
@@ -969,6 +970,360 @@
         "Product"
       ],
       "critical_note": "Brand filter: p.VendorCode LIKE N'MG%'"
+    },
+    {
+      "id": "client_region_kyiv_join",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Clients from Kyiv region",
+      "question_uk": "Клієнти з Київської області",
+      "variations_en": [
+        "customers from Kyiv",
+        "Kyiv clients",
+        "clients in Kyiv region"
+      ],
+      "variations_uk": [
+        "клієнти із київської обл",
+        "київські клієнти",
+        "покупці з києва",
+        "клієнти київщини"
+      ],
+      "sql": "SELECT TOP 20 c.ID, c.Name, r.Name as RegionCode FROM dbo.Client c INNER JOIN dbo.Region r ON c.RegionID = r.ID WHERE r.Name = 'KI' AND c.Deleted = 0 ORDER BY c.Name",
+      "tables_used": [
+        "Client",
+        "Region"
+      ],
+      "notes": "Region codes: KI=Kyiv, XM=Khmelnytskyi, LV=Lviv, OD=Odesa, DN=Donetsk, DP=Dnipro"
+    },
+    {
+      "id": "client_region_lviv_join",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Clients from Lviv region",
+      "question_uk": "Клієнти з Львівської області",
+      "variations_en": [
+        "customers from Lviv",
+        "Lviv clients"
+      ],
+      "variations_uk": [
+        "клієнти із львівської обл",
+        "львівські клієнти",
+        "покупці зі львова"
+      ],
+      "sql": "SELECT TOP 20 c.ID, c.Name, r.Name as RegionCode FROM dbo.Client c INNER JOIN dbo.Region r ON c.RegionID = r.ID WHERE r.Name = 'LV' AND c.Deleted = 0 ORDER BY c.Name",
+      "tables_used": [
+        "Client",
+        "Region"
+      ]
+    },
+    {
+      "id": "client_region_kharkiv_join",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Clients from Kharkiv region",
+      "question_uk": "Клієнти з Харківської області",
+      "variations_en": [
+        "customers from Kharkiv",
+        "Kharkiv clients"
+      ],
+      "variations_uk": [
+        "клієнти із харківської обл",
+        "харківські клієнти",
+        "покупці з харкова"
+      ],
+      "sql": "SELECT TOP 20 c.ID, c.Name, r.Name as RegionCode FROM dbo.Client c INNER JOIN dbo.Region r ON c.RegionID = r.ID WHERE r.Name = 'XV' AND c.Deleted = 0 ORDER BY c.Name",
+      "tables_used": [
+        "Client",
+        "Region"
+      ],
+      "notes": "Kharkiv region code is XV"
+    },
+    {
+      "id": "client_region_odesa_join",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Clients from Odesa region",
+      "question_uk": "Клієнти з Одеської області",
+      "variations_en": [
+        "customers from Odesa",
+        "Odesa clients"
+      ],
+      "variations_uk": [
+        "клієнти із одеської обл",
+        "одеські клієнти",
+        "покупці з одеси"
+      ],
+      "sql": "SELECT TOP 20 c.ID, c.Name, r.Name as RegionCode FROM dbo.Client c INNER JOIN dbo.Region r ON c.RegionID = r.ID WHERE r.Name = 'OD' AND c.Deleted = 0 ORDER BY c.Name",
+      "tables_used": [
+        "Client",
+        "Region"
+      ]
+    },
+    {
+      "id": "client_count_by_region",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Client count by region",
+      "question_uk": "Кількість клієнтів по регіонах",
+      "variations_en": [
+        "clients per region",
+        "regional distribution",
+        "customers by region"
+      ],
+      "variations_uk": [
+        "клієнти по областях",
+        "розподіл по регіонах",
+        "скільки клієнтів в кожній області"
+      ],
+      "sql": "SELECT r.Name as RegionCode, COUNT(c.ID) as ClientCount FROM dbo.Client c INNER JOIN dbo.Region r ON c.RegionID = r.ID WHERE c.Deleted = 0 GROUP BY r.Name ORDER BY ClientCount DESC",
+      "tables_used": [
+        "Client",
+        "Region"
+      ]
+    },
+    {
+      "id": "client_region_generic_join",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Clients from specific region by code",
+      "question_uk": "Клієнти з певного регіону",
+      "variations_en": [
+        "clients by region code",
+        "regional clients filter"
+      ],
+      "variations_uk": [
+        "клієнти за кодом регіону",
+        "фільтр по регіону"
+      ],
+      "sql": "SELECT TOP 30 c.ID, c.Name, c.LegalAddress, r.Name as RegionCode FROM dbo.Client c INNER JOIN dbo.Region r ON c.RegionID = r.ID WHERE c.Deleted = 0 AND r.Name = 'XX' ORDER BY c.Name",
+      "tables_used": [
+        "Client",
+        "Region"
+      ],
+      "notes": "Replace XX with region code: KI=Kyiv, LV=Lviv, OD=Odesa, DN=Donetsk, DP=Dnipro, XV=Kharkiv, XM=Khmelnytskyi"
+    },
+    {
+      "id": "region_list",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "List all regions",
+      "question_uk": "Список всіх регіонів",
+      "variations_en": [
+        "show regions",
+        "available regions"
+      ],
+      "variations_uk": [
+        "покажи регіони",
+        "які регіони є",
+        "всі області"
+      ],
+      "sql": "SELECT r.ID, r.Name as RegionCode FROM dbo.Region r WHERE r.Deleted = 0 ORDER BY r.Name",
+      "tables_used": [
+        "Region"
+      ]
+    },
+    {
+      "id": "client_purchases_with_date",
+      "category": "multi_table",
+      "complexity": "medium",
+      "question_en": "Products purchased by client with date",
+      "question_uk": "Товари які купував клієнт з датою покупки",
+      "variations_en": [
+        "what did client buy and when",
+        "client purchase history with dates",
+        "products bought by customer with purchase date"
+      ],
+      "variations_uk": [
+        "що купував клієнт і коли",
+        "історія покупок клієнта з датами",
+        "товари клієнта з датою замовлення",
+        "покажи покупки клієнта з датою",
+        "список товарів які купував клієнт з датою покупки"
+      ],
+      "sql": "SELECT p.Name as ProductName, p.VendorCode, oi.Qty as Quantity, o.Created as OrderDate FROM dbo.Product p JOIN dbo.OrderItem oi ON p.ID = oi.ProductID JOIN dbo.[Order] o ON oi.OrderID = o.ID JOIN dbo.ClientAgreement ca ON o.ClientAgreementID = ca.ID JOIN dbo.Client c ON ca.ClientID = c.ID WHERE c.Name LIKE N'%ClientName%' AND p.Deleted = 0 AND oi.Deleted = 0 AND o.Deleted = 0 AND c.Deleted = 0 ORDER BY o.Created DESC",
+      "tables_used": [
+        "Product",
+        "OrderItem",
+        "Order",
+        "ClientAgreement",
+        "Client"
+      ],
+      "notes": "Replace ClientName with actual client name. Order.Created is the purchase date."
+    },
+    {
+      "id": "client_type_comparison",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Compare FOP vs TOV client counts",
+      "question_uk": "Порівняти кількість ФОП та ТОВ клієнтів",
+      "variations_en": [
+        "how many FOP vs TOV clients",
+        "count clients by type FOP TOV"
+      ],
+      "variations_uk": [
+        "яких клієнтів більше ФОП чи ТОВ",
+        "скільки ФОП і ТОВ",
+        "порівняй ФОП та ТОВ",
+        "кількість ФОП vs ТОВ"
+      ],
+      "sql": "SELECT SUM(CASE WHEN Name LIKE N'%ФОП%' THEN 1 ELSE 0 END) as FOP_Count, SUM(CASE WHEN Name LIKE N'%ТОВ' OR Name LIKE N'ТОВ %' THEN 1 ELSE 0 END) as TOV_Count, SUM(CASE WHEN Name LIKE N'%ПП' OR Name LIKE N'ПП %' THEN 1 ELSE 0 END) as PP_Count FROM dbo.Client WHERE Deleted = 0",
+      "tables_used": ["Client"],
+      "notes": "Client type determined by name pattern: ФОП (sole proprietor), ТОВ (LLC), ПП (private enterprise)"
+    },
+    {
+      "id": "client_type_purchases",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Who buys more - FOP or TOV clients",
+      "question_uk": "Хто більше купляє ФОП чи ТОВ",
+      "variations_en": [
+        "compare purchases FOP vs TOV",
+        "which client type buys more",
+        "total sales by client type",
+        "FOP or TOV spending comparison"
+      ],
+      "variations_uk": [
+        "хто більше купляє фоп чи тов",
+        "порівняй покупки ФОП та ТОВ",
+        "сума покупок по типу клієнта",
+        "ФОП чи ТОВ купляє більше",
+        "загальні продажі ФОП vs ТОВ"
+      ],
+      "sql": "SELECT CASE WHEN c.Name LIKE N'%ФОП%' THEN 'ФОП' WHEN c.Name LIKE N'%ТОВ%' THEN 'ТОВ' ELSE 'Інші' END as ClientType, COUNT(DISTINCT c.ID) as ClientCount, COUNT(DISTINCT o.ID) as OrderCount, SUM(oi.Qty * oi.PricePerItem) as TotalAmount FROM dbo.Client c JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID WHERE c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 AND (c.Name LIKE N'%ФОП%' OR c.Name LIKE N'%ТОВ%') GROUP BY CASE WHEN c.Name LIKE N'%ФОП%' THEN 'ФОП' WHEN c.Name LIKE N'%ТОВ%' THEN 'ТОВ' ELSE 'Інші' END ORDER BY TotalAmount DESC",
+      "tables_used": ["Client", "ClientAgreement", "Order", "OrderItem"],
+      "notes": "Groups clients by type (ФОП/ТОВ) and compares total purchase amounts"
+    },
+    {
+      "id": "bank_list_055",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "List all banks",
+      "question_uk": "Список банків",
+      "variations_en": [
+        "show all banks",
+        "which banks are used",
+        "all banks",
+        "bank list"
+      ],
+      "variations_uk": [
+        "які банки використовуються",
+        "покажи банки",
+        "всі банки",
+        "перелік банків"
+      ],
+      "sql": "SELECT ID, Name, City, MfoCode FROM dbo.Bank WHERE Deleted = 0 ORDER BY Name",
+      "tables_used": ["Bank"]
+    },
+    {
+      "id": "bank_count_056",
+      "category": "aggregation",
+      "complexity": "simple",
+      "question_en": "How many banks",
+      "question_uk": "Скільки банків",
+      "variations_en": [
+        "bank count",
+        "total banks",
+        "number of banks"
+      ],
+      "variations_uk": [
+        "кількість банків",
+        "всього банків",
+        "порахуй банки"
+      ],
+      "sql": "SELECT COUNT(*) as BankCount FROM dbo.Bank WHERE Deleted = 0",
+      "tables_used": ["Bank"]
+    },
+    {
+      "id": "region_purchases_by_month",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "How much did Kyiv region buy in September",
+      "question_uk": "Скільки купляв Київ за вересень",
+      "variations_en": [
+        "Kyiv purchases in September",
+        "total sales to Kyiv in September",
+        "Kyiv region orders in September",
+        "how much was bought by Kyiv region"
+      ],
+      "variations_uk": [
+        "скільки купив Київ за вересень",
+        "скільки закупив Київ у вересні",
+        "продажі в Київ за вересень",
+        "замовлення Києва за вересень",
+        "обсяг закупок Київ вересень",
+        "сума замовлень Київ вересень"
+      ],
+      "sql": "SELECT r.Name as RegionCode, COUNT(DISTINCT o.ID) as OrderCount, SUM(oi.Qty * oi.PricePerItem) as TotalAmount FROM dbo.Region r JOIN dbo.Client c ON c.RegionID = r.ID JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID WHERE r.Name = 'KI' AND DATEPART(MONTH, o.Created) = 9 AND c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 GROUP BY r.Name",
+      "tables_used": ["Region", "Client", "ClientAgreement", "Order", "OrderItem"],
+      "notes": "CRITICAL: Region.Name contains 2-letter codes, NOT full names. Map: Київ=KI, Львів=LV, Одеса=OD, Харків=XV, Хмельницький=XM, Дніпро=DP. For 'Київ' use WHERE r.Name = 'KI'"
+    },
+    {
+      "id": "region_purchases_generic",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "How much did a region buy in a specific month",
+      "question_uk": "Скільки купляв регіон за місяць",
+      "variations_en": [
+        "regional purchases by month",
+        "region sales in month",
+        "how much did region order"
+      ],
+      "variations_uk": [
+        "скільки купляв регіон",
+        "продажі по регіону за місяць",
+        "обсяг закупок регіону",
+        "скільки закупив регіон",
+        "замовлення регіону за місяць"
+      ],
+      "sql": "SELECT r.Name as RegionCode, COUNT(DISTINCT o.ID) as OrderCount, SUM(oi.Qty * oi.PricePerItem) as TotalAmount FROM dbo.Region r JOIN dbo.Client c ON c.RegionID = r.ID JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID WHERE r.Name = 'XX' AND DATEPART(MONTH, o.Created) = MM AND c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 GROUP BY r.Name",
+      "tables_used": ["Region", "Client", "ClientAgreement", "Order", "OrderItem"],
+      "notes": "CRITICAL: Region.Name contains 2-letter codes only. Map Ukrainian names to codes: Київ=KI, Львів=LV, Одеса=OD, Харків=XV, Хмельницький=XM, Дніпро=DP. Replace XX with code and MM with month (1-12)."
+    },
+    {
+      "id": "region_qty_and_amount",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Show quantity and amount for a region",
+      "question_uk": "Хмельницький виведи кількість товару і на яку суму",
+      "variations_en": [
+        "region product quantity and total",
+        "how much product and amount for region",
+        "region purchases quantity and sum"
+      ],
+      "variations_uk": [
+        "Київ виведи кількість товару і суму",
+        "Львів кількість товару і на яку суму",
+        "Одеса покажи кількість і суму",
+        "регіон кількість товару і сума",
+        "скільки товару купив регіон і на яку суму",
+        "покажи кількість і суму по регіону"
+      ],
+      "sql": "SELECT r.Name as RegionCode, SUM(oi.Qty) as TotalQty, SUM(oi.Qty * oi.PricePerItem) as TotalAmount FROM dbo.Region r JOIN dbo.Client c ON c.RegionID = r.ID JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID WHERE r.Name = 'XM' AND c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 GROUP BY r.Name",
+      "tables_used": ["Region", "Client", "ClientAgreement", "Order", "OrderItem"],
+      "notes": "CRITICAL: Region.Name column contains 2-letter codes, NOT full names. Map Ukrainian region names to codes: Київ=KI, Львів=LV, Одеса=OD, Харків=XV, Хмельницький=XM, Дніпро=DP. For 'Хмельницький' use WHERE r.Name = 'XM'"
+    },
+    {
+      "id": "client_count_by_region_specific",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "How many clients in Khmelnytskyi region",
+      "question_uk": "скільки клієнтів в хмельницькому",
+      "variations_en": [
+        "client count in Khmelnytskyi",
+        "number of clients in Kyiv region",
+        "how many customers in Lviv"
+      ],
+      "variations_uk": [
+        "скільки клієнтів у хмельницькому",
+        "кількість клієнтів в києві",
+        "скільки клієнтів у львові",
+        "клієнти в одесі скільки",
+        "кількість клієнтів по регіону",
+        "скільки клієнтів в регіоні"
+      ],
+      "sql": "SELECT COUNT(*) as ClientCount FROM dbo.Client c WHERE c.Deleted = 0 AND c.RegionID IN (SELECT ID FROM dbo.Region WHERE Name = 'XM')",
+      "tables_used": ["Client", "Region"],
+      "notes": "CRITICAL: Region.Name contains 2-letter codes only. Map: Київ=KI, Львів=LV, Одеса=OD, Харків=XV, Хмельницький=XM, Дніпро=DP. For 'хмельницькому' use WHERE r.Name = 'XM'"
     }
   ]
 }

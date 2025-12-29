@@ -108,11 +108,23 @@ class ChromaDBManager:
             client = self.get_client(db_path)
             try:
                 # Try to get existing collection (without embedding function to avoid conflict)
-                self._collections[cache_key] = client.get_collection(
-                    name=collection_name
-                )
-                count = self._collections[cache_key].count()
-                logger.info(f"Loaded existing collection '{collection_name}' ({count} docs)")
+                collection = client.get_collection(name=collection_name)
+                try:
+                    count = collection.count()
+                    logger.info(f"Loaded existing collection '{collection_name}' ({count} docs)")
+                except Exception as count_err:
+                    logger.warning(f"Collection '{collection_name}' invalid, recreating: {count_err}")
+                    try:
+                        client.delete_collection(name=collection_name)
+                    except Exception:
+                        pass
+                    collection = client.create_collection(
+                        name=collection_name,
+                        embedding_function=self.embedding_fn,
+                        metadata={"hnsw:space": "cosine"},
+                    )
+                    logger.info(f"Recreated collection: {collection_name}")
+                self._collections[cache_key] = collection
             except Exception as e:
                 # Collection doesn't exist, create new one with embedding function
                 try:
@@ -133,6 +145,18 @@ class ChromaDBManager:
     def get_or_create_collection(self, db_path: str, collection_name: str):
         """Alias for get_collection (for compatibility)."""
         return self.get_collection(db_path, collection_name)
+
+    def invalidate_collection(self, db_path: str, collection_name: str) -> None:
+        """Invalidate cached collection (call before deleting).
+
+        Args:
+            db_path: Path to the database
+            collection_name: Name of the collection to invalidate
+        """
+        cache_key = f"{db_path}:{collection_name}"
+        if cache_key in self._collections:
+            del self._collections[cache_key]
+            logger.debug(f"Invalidated collection cache: {cache_key}")
 
     def get_cached_embedding(self, text: str) -> List[float]:
         """Get embedding for text using cache (100-300ms savings per hit).

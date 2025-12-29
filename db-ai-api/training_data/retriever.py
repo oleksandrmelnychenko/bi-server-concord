@@ -177,7 +177,12 @@ class QueryExampleRetriever:
                     db_path=str(self.db_path),
                     collection_name=self.COLLECTION_NAME
                 )
-                logger.info(f"Loaded query examples collection via shared manager ({self.collection.count()} examples)")
+                try:
+                    count = self.collection.count()
+                    logger.info(f"Loaded query examples collection via shared manager ({count} examples)")
+                except Exception as count_err:
+                    logger.warning(f"Query examples collection count failed: {count_err}")
+                    self.collection = None
             except Exception as e:
                 logger.warning(f"Collection not found: {e}")
                 self.collection = None
@@ -195,7 +200,12 @@ class QueryExampleRetriever:
                     name=self.COLLECTION_NAME,
                     embedding_function=self.embedding_fn
                 )
-                logger.info(f"Loaded query examples collection ({self.collection.count()} examples)")
+                try:
+                    count = self.collection.count()
+                    logger.info(f"Loaded query examples collection ({count} examples)")
+                except Exception as count_err:
+                    logger.warning(f"Query examples collection count failed: {count_err}")
+                    self.collection = None
             except Exception as e:
                 logger.warning(f"Collection not found: {e}")
                 self.collection = None
@@ -258,7 +268,13 @@ class QueryExampleRetriever:
 
     def is_available(self) -> bool:
         """Check if the retriever is ready to use."""
-        return self.collection is not None and self.collection.count() > 0
+        if self.collection is None:
+            return False
+        try:
+            return self.collection.count() > 0
+        except Exception as err:
+            logger.warning(f"Query examples collection count failed: {err}")
+            return False
 
     def correct_query(self, query: str) -> List[str]:
         """
@@ -329,12 +345,16 @@ class QueryExampleRetriever:
 
         # BATCH QUERY: Single ChromaDB call with multiple query_texts
         # This is 60-80% faster than separate queries for each correction
-        results = self.collection.query(
-            query_texts=unique_queries,
-            n_results=top_k,
-            where=where_filter,
-            include=["metadatas", "distances", "documents"],
-        )
+        try:
+            results = self.collection.query(
+                query_texts=unique_queries,
+                n_results=top_k,
+                where=where_filter,
+                include=["metadatas", "distances", "documents"],
+            )
+        except Exception as err:
+            logger.warning(f"Query examples search failed: {err}")
+            return []
 
         if not results or not results["ids"]:
             return []
@@ -373,6 +393,7 @@ class QueryExampleRetriever:
                     "question_uk": metadata.get("question_uk", ""),
                     "sql": metadata.get("sql", ""),
                     "tables_used": metadata.get("tables_used", "").split(",") if metadata.get("tables_used") else [],
+                    "notes": metadata.get("notes", ""),  # Include notes for domain hints
                     "similarity_score": round(similarity, 3),
                 }
 
@@ -415,12 +436,16 @@ class QueryExampleRetriever:
             where_filter = {"domain": domain_filter}
 
         # Query ChromaDB
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=top_k,
-            where=where_filter,
-            include=["metadatas", "distances", "documents"],
-        )
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=top_k,
+                where=where_filter,
+                include=["metadatas", "distances", "documents"],
+            )
+        except Exception as err:
+            logger.warning(f"Query examples search failed: {err}")
+            return []
 
         if not results or not results["ids"] or not results["ids"][0]:
             return []
@@ -448,6 +473,7 @@ class QueryExampleRetriever:
                 "question_uk": metadata.get("question_uk", ""),
                 "sql": metadata.get("sql", ""),
                 "tables_used": metadata.get("tables_used", "").split(",") if metadata.get("tables_used") else [],
+                "notes": metadata.get("notes", ""),  # Include notes for domain hints
                 "similarity_score": round(similarity, 3),
             })
 
@@ -486,6 +512,10 @@ class QueryExampleRetriever:
             # Show SQL
             lines.append(f"SQL: {ex['sql']}")
 
+            # Show notes if available (important for domain-specific hints)
+            if ex.get("notes"):
+                lines.append(f"Note: {ex['notes']}")
+
         return "\n".join(lines)
 
     def get_examples_by_domain(self, domain: str, limit: int = 10) -> List[Dict[str, Any]]:
@@ -501,11 +531,15 @@ class QueryExampleRetriever:
         if not self.is_available():
             return []
 
-        results = self.collection.get(
-            where={"domain": domain},
-            include=["metadatas"],
-            limit=limit,
-        )
+        try:
+            results = self.collection.get(
+                where={"domain": domain},
+                include=["metadatas"],
+                limit=limit,
+            )
+        except Exception as err:
+            logger.warning(f"Query examples lookup failed: {err}")
+            return []
 
         examples = []
         for metadata in results.get("metadatas", []):
@@ -538,11 +572,15 @@ class QueryExampleRetriever:
         # Use table name as query to find relevant examples
         query = " ".join(tables)
 
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=limit * 2,  # Get extra to filter
-            include=["metadatas", "distances"],
-        )
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=limit * 2,  # Get extra to filter
+                include=["metadatas", "distances"],
+            )
+        except Exception as err:
+            logger.warning(f"Query examples search failed: {err}")
+            return []
 
         if not results or not results["ids"] or not results["ids"][0]:
             return []
@@ -560,6 +598,7 @@ class QueryExampleRetriever:
                     "question_uk": metadata.get("question_uk", ""),
                     "sql": metadata.get("sql", ""),
                     "tables_used": example_tables,
+                    "notes": metadata.get("notes", ""),  # Include notes for domain hints
                     "similarity_score": round(1 - distance, 3),
                 })
 
@@ -577,10 +616,23 @@ class QueryExampleRetriever:
         if not self.is_available():
             return {"available": False, "total_examples": 0}
 
-        count = self.collection.count()
+        try:
+            count = self.collection.count()
+        except Exception as err:
+            logger.warning(f"Query examples collection count failed: {err}")
+            return {"available": False, "total_examples": 0}
 
         # Get domain breakdown
-        results = self.collection.get(include=["metadatas"])
+        try:
+            results = self.collection.get(include=["metadatas"])
+        except Exception as err:
+            logger.warning(f"Query examples metadata fetch failed: {err}")
+            return {
+                "available": True,
+                "total_examples": count,
+                "domains": {},
+                "db_path": str(self.db_path),
+            }
         domains = {}
         for metadata in results.get("metadatas", []):
             domain = metadata.get("domain", "unknown")

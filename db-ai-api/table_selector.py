@@ -36,6 +36,10 @@ class TableSelector:
         "dbo.Sale",             # Sales - продажі (linked via OrderID and ClientAgreementID)
         "dbo.Region",           # Regions - області, регіони (for address filtering)
         "dbo.ProductAvailability",  # Stock/inventory - залишки на складі (Amount = quantity)
+        "dbo.Debt",             # Debts/receivables - борги (CRITICAL: for debt queries!)
+        "dbo.ClientInDebt",     # Client-debt relationship - зв'язок клієнт-борг (links Client to Debt)
+        "dbo.Payment",          # Payments - платежі
+        "dbo.Bank",             # Banks - банки
     ]
 
     def __init__(self, schema_extractor: Optional[SchemaExtractor] = None):
@@ -60,6 +64,19 @@ class TableSelector:
             collection_name=self.collection_name
         )
 
+    def _safe_collection_count(self) -> int:
+        """Get collection count with guardrails for invalid collections."""
+        try:
+            return self.collection.count()
+        except Exception as err:
+            logger.warning(f"Collection count failed, recreating: {err}")
+            self.collection = self._get_or_create_collection()
+            try:
+                return self.collection.count()
+            except Exception as retry_err:
+                logger.warning(f"Collection count failed after recreate: {retry_err}")
+                return 0
+
     def index_schema(self, force_refresh: bool = False) -> None:
         """Index all tables and views into the vector database.
 
@@ -67,11 +84,17 @@ class TableSelector:
             force_refresh: Force re-indexing even if already indexed
         """
         # Check if already indexed
-        if not force_refresh and self.collection.count() > 0:
-            logger.info(
-                f"Collection already has {self.collection.count()} items, skipping indexing"
-            )
-            return
+        if not force_refresh:
+            count = self._safe_collection_count()
+            if count > 0:
+                logger.info(
+                    f"Collection already has {count} items, skipping indexing"
+                )
+                return
+
+        # Fallback to ensure collection is valid before indexing
+        if self.collection is None:
+            self.collection = self._get_or_create_collection()
 
         logger.info("Indexing database schema into vector database...")
 
@@ -99,6 +122,11 @@ class TableSelector:
         # Clear existing collection if force refresh
         if force_refresh:
             try:
+                # Invalidate cache BEFORE deleting to avoid stale references
+                chroma_manager.invalidate_collection(
+                    db_path=settings.vector_db_path,
+                    collection_name=self.collection_name
+                )
                 self.client.delete_collection(name=self.collection_name)
             except Exception:
                 pass  # Collection may not exist
@@ -199,7 +227,16 @@ class TableSelector:
 
         # Query the vector database using cached embeddings
         query_embedding = chroma_manager.get_cached_embedding(query)
-        results = self.collection.query(query_embeddings=[query_embedding], n_results=top_k)
+        try:
+            results = self.collection.query(query_embeddings=[query_embedding], n_results=top_k)
+        except Exception as err:
+            logger.warning(f"Collection query failed, recreating: {err}")
+            self.collection = self._get_or_create_collection()
+            try:
+                results = self.collection.query(query_embeddings=[query_embedding], n_results=top_k)
+            except Exception as retry_err:
+                logger.error(f"Collection query failed after recreate: {retry_err}")
+                return []
 
         relevant_tables = []
 
@@ -330,27 +367,11 @@ class TableSelector:
             tier2_parts.append("-- === TIER 2: RELEVANT TABLES (ID*, FKcol→Table, key cols) ===")
             tier2_parts.extend(rag_tables)
 
-        # TIER 3: ALL other non-empty tables as compact one-liners (sorted alphabetically)
-        other_tables = []
-        for table_name in sorted(schema["tables"].keys()):
-            if table_name in included_tables:
-                continue
-            table_info = schema["tables"][table_name]
-            if table_info.get("row_count", 0) == 0:
-                continue  # Skip empty tables
+        # TIER 3: Removed - was adding 200+ tables that confused models
+        # Models work better with focused context (Tier 1 + Tier 2 only)
 
-            compact = self._format_as_compact_list(table_name, table_info)
-            other_tables.append(compact)
-
-        if other_tables:
-            tier3_parts.append(f"-- === TIER 3: OTHER TABLES ({len(other_tables)} tables, columns listed) ===")
-            # Group in lines of 3 for readability
-            for i in range(0, len(other_tables), 3):
-                line = "  " + "  |  ".join(other_tables[i:i+3])
-                tier3_parts.append(line)
-
-        # Combine all tiers
-        all_parts = tier1_parts + [""] + tier2_parts + [""] + tier3_parts
+        # Combine tiers (without Tier 3)
+        all_parts = tier1_parts + [""] + tier2_parts
 
         if not tier1_parts[1:]:  # Only header, no tables
             return "No relevant tables found."
@@ -605,30 +626,21 @@ class TableSelector:
         return "\n".join(lines)
 
     def get_full_schema_context(self, query: str, top_k: Optional[int] = None) -> str:
-        """Get context with compact full schema + detailed selected tables.
+        """Get focused schema context for relevant tables only.
 
-        This combines:
-        1. Ultra-compact full schema (all tables in one-liners)
-        2. Detailed schema for core + RAG-selected tables
+        Returns only core + RAG-selected tables (no full schema dump).
+        This keeps context small enough for smaller models to handle.
 
         Args:
             query: Natural language query
             top_k: Number of tables for RAG selection
 
         Returns:
-            Combined context string
+            Focused context string with relevant tables only
         """
-        # Get compact full schema
-        compact_schema = self.generate_compact_full_schema()
-
-        # Get detailed context for relevant tables
-        detailed_context = self._generate_context(query, top_k)
-
-        return f"""=== FULL DATABASE SCHEMA (all tables) ===
-{compact_schema}
-
-=== DETAILED SCHEMA (relevant tables) ===
-{detailed_context}"""
+        # Only return detailed context for relevant tables
+        # Removed compact_schema which was 300+ table one-liners that confused models
+        return self._generate_context(query, top_k)
 
     def _format_as_key_columns(self, table_name: str, table_info: Dict[str, Any]) -> str:
         """Format table with only key columns for Tier 2.

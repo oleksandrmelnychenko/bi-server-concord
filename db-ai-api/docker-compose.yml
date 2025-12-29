@@ -10,13 +10,13 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # RAG Configuration
-      - CHROMA_DIR=/app/chroma_db_full
-      - COLLECTION_NAME=concorddb_full
+      # RAG Configuration (v2)
+      - CHROMA_DIR=/app/chroma_db_full_v2
+      - COLLECTION_NAME=concorddb_full_v2
       - EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
     volumes:
-      # Full embeddings (2.28M documents)
-      - ./chroma_db_full:/app/chroma_db_full
+      # Full embeddings v2
+      - ./chroma_db_full_v2:/app/chroma_db_full_v2
       - ./logs:/app/logs
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -26,7 +26,7 @@
         "загальна заборгованість",
         "скільки винні"
       ],
-      "sql": "SELECT SUM(Amount) as TotalDebt FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 0",
+      "sql": "SELECT SUM(Total) as TotalDebt FROM dbo.Debt WHERE Deleted = 0",
       "tables_used": [
         "Debt"
       ]
@@ -47,7 +47,7 @@
         "кількість заборгованостей",
         "непогашені рахунки"
       ],
-      "sql": "SELECT COUNT(*) as DebtCount FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 0",
+      "sql": "SELECT COUNT(*) as DebtCount FROM dbo.Debt WHERE Deleted = 0",
       "tables_used": [
         "Debt"
       ]
@@ -64,11 +64,17 @@
       ],
       "variations_uk": [
         "заборгованість клієнтів",
-        "хто винен гроші"
+        "хто винен гроші",
+        "покажи борги клієнтів",
+        "борги клієнтів",
+        "список боргів клієнтів",
+        "клієнти з боргами",
+        "які борги у клієнтів"
       ],
-      "sql": "SELECT TOP 50 c.ID, c.Name, SUM(d.Amount) as TotalDebt, COUNT(d.ID) as DebtCount FROM dbo.Client c JOIN dbo.Debt d ON c.ID = d.ClientID WHERE c.Deleted = 0 AND d.Deleted = 0 AND d.IsPaid = 0 GROUP BY c.ID, c.Name ORDER BY TotalDebt DESC",
+      "sql": "SELECT TOP 50 c.ID, c.Name, SUM(d.Total) as TotalDebt, COUNT(d.ID) as DebtCount FROM dbo.Client c JOIN dbo.ClientInDebt cid ON c.ID = cid.ClientID JOIN dbo.Debt d ON cid.DebtID = d.ID WHERE c.Deleted = 0 AND cid.Deleted = 0 AND d.Deleted = 0 GROUP BY c.ID, c.Name ORDER BY TotalDebt DESC",
       "tables_used": [
         "Client",
+        "ClientInDebt",
         "Debt"
       ]
     },
@@ -86,9 +92,38 @@
         "найбільші боржники",
         "хто найбільше винен"
       ],
-      "sql": "SELECT TOP 10 c.ID, c.Name, c.Phone, SUM(d.Amount) as TotalDebt FROM dbo.Client c JOIN dbo.Debt d ON c.ID = d.ClientID WHERE c.Deleted = 0 AND d.Deleted = 0 AND d.IsPaid = 0 GROUP BY c.ID, c.Name, c.Phone ORDER BY TotalDebt DESC",
+      "sql": "SELECT TOP 10 c.ID, c.Name, SUM(d.Total) as TotalDebt FROM dbo.Client c JOIN dbo.ClientInDebt cid ON c.ID = cid.ClientID JOIN dbo.Debt d ON cid.DebtID = d.ID WHERE c.Deleted = 0 AND cid.Deleted = 0 AND d.Deleted = 0 GROUP BY c.ID, c.Name ORDER BY TotalDebt DESC",
       "tables_used": [
         "Client",
+        "ClientInDebt",
+        "Debt"
+      ]
+    },
+    {
+      "id": "debt_by_region_035",
+      "category": "filter",
+      "complexity": "medium",
+      "question_en": "Debtors in a specific region",
+      "question_uk": "Боржники в області",
+      "variations_en": [
+        "clients with debt in region",
+        "debtors by region",
+        "regional debtors list"
+      ],
+      "variations_uk": [
+        "клієнти боржники у Хмельницькій області",
+        "боржники у Київській області",
+        "боржники в регіоні",
+        "хто винен в області",
+        "клієнти з боргами в регіоні",
+        "борги по регіону",
+        "які клієнти боржники в області"
+      ],
+      "sql": "SELECT TOP 50 c.ID, c.Name, r.Name as RegionName, SUM(d.Total) as TotalDebt, COUNT(d.ID) as DebtCount FROM dbo.Client c JOIN dbo.Region r ON c.RegionID = r.ID JOIN dbo.ClientInDebt cid ON c.ID = cid.ClientID JOIN dbo.Debt d ON cid.DebtID = d.ID WHERE c.Deleted = 0 AND cid.Deleted = 0 AND d.Deleted = 0 AND r.Name LIKE N'%Хмельницьк%' GROUP BY c.ID, c.Name, r.Name ORDER BY TotalDebt DESC",
+      "tables_used": [
+        "Client",
+        "Region",
+        "ClientInDebt",
         "Debt"
       ]
     },
@@ -106,9 +141,10 @@
         "прострочена заборгованість",
         "несвоєчасні платежі"
       ],
-      "sql": "SELECT TOP 50 d.ID, c.Name, d.Amount, d.DueDate, DATEDIFF(day, d.DueDate, GETDATE()) as DaysOverdue FROM dbo.Debt d JOIN dbo.Client c ON d.ClientID = c.ID WHERE d.Deleted = 0 AND c.Deleted = 0 AND d.IsPaid = 0 AND d.DueDate < GETDATE() ORDER BY DaysOverdue DESC",
+      "sql": "SELECT TOP 50 d.ID, c.Name, d.Total, d.Days, d.Created FROM dbo.Debt d JOIN dbo.ClientInDebt cid ON d.ID = cid.DebtID JOIN dbo.Client c ON cid.ClientID = c.ID WHERE d.Deleted = 0 AND cid.Deleted = 0 AND c.Deleted = 0 AND d.Days > 30 ORDER BY d.Days DESC",
       "tables_used": [
         "Debt",
+        "ClientInDebt",
         "Client"
       ]
     },
@@ -126,9 +162,10 @@
         "нові борги",
         "свіжі заборгованості"
       ],
-      "sql": "SELECT TOP 20 d.ID, c.Name, d.Amount, d.Created, d.DueDate FROM dbo.Debt d JOIN dbo.Client c ON d.ClientID = c.ID WHERE d.Deleted = 0 AND c.Deleted = 0 ORDER BY d.Created DESC",
+      "sql": "SELECT TOP 20 d.ID, c.Name, d.Total, d.Created, d.Days FROM dbo.Debt d JOIN dbo.ClientInDebt cid ON d.ID = cid.DebtID JOIN dbo.Client c ON cid.ClientID = c.ID WHERE d.Deleted = 0 AND cid.Deleted = 0 AND c.Deleted = 0 ORDER BY d.Created DESC",
       "tables_used": [
         "Debt",
+        "ClientInDebt",
         "Client"
       ]
     },
@@ -298,7 +335,7 @@
         "погашені борги",
         "закриті борги"
       ],
-      "sql": "SELECT SUM(Amount) as PaidDebts FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 1",
+      "sql": "SELECT SUM(Total) as TotalDebts, COUNT(*) as DebtCount FROM dbo.Debt WHERE Deleted = 0",
       "tables_used": [
         "Debt"
       ]
@@ -317,7 +354,7 @@
         "вік боргів",
         "як давно борги"
       ],
-      "sql": "SELECT CASE WHEN DATEDIFF(day, Created, GETDATE()) <= 30 THEN '0-30 days' WHEN DATEDIFF(day, Created, GETDATE()) <= 60 THEN '31-60 days' WHEN DATEDIFF(day, Created, GETDATE()) <= 90 THEN '61-90 days' ELSE '90+ days' END as AgeBucket, COUNT(*) as DebtCount, SUM(Amount) as TotalAmount FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 0 GROUP BY CASE WHEN DATEDIFF(day, Created, GETDATE()) <= 30 THEN '0-30 days' WHEN DATEDIFF(day, Created, GETDATE()) <= 60 THEN '31-60 days' WHEN DATEDIFF(day, Created, GETDATE()) <= 90 THEN '61-90 days' ELSE '90+ days' END",
+      "sql": "SELECT CASE WHEN Days <= 30 THEN '0-30 days' WHEN Days <= 60 THEN '31-60 days' WHEN Days <= 90 THEN '61-90 days' ELSE '90+ days' END as AgeBucket, COUNT(*) as DebtCount, SUM(Total) as TotalAmount FROM dbo.Debt WHERE Deleted = 0 GROUP BY CASE WHEN Days <= 30 THEN '0-30 days' WHEN Days <= 60 THEN '31-60 days' WHEN Days <= 90 THEN '61-90 days' ELSE '90+ days' END",
       "tables_used": [
         "Debt"
       ]
@@ -376,11 +413,11 @@
         "чистий баланс",
         "залишок боргу"
       ],
-      "sql": "SELECT c.ID, c.Name, ISNULL(d.TotalDebt, 0) as TotalDebt, ISNULL(p.TotalPaid, 0) as TotalPaid, ISNULL(d.TotalDebt, 0) - ISNULL(p.TotalPaid, 0) as Balance FROM dbo.Client c LEFT JOIN (SELECT ClientID, SUM(Amount) as TotalDebt FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 0 GROUP BY ClientID) d ON c.ID = d.ClientID LEFT JOIN (SELECT ClientID, SUM(Amount) as TotalPaid FROM dbo.Payment WHERE Deleted = 0 GROUP BY ClientID) p ON c.ID = p.ClientID WHERE c.Deleted = 0 AND (d.TotalDebt > 0 OR p.TotalPaid > 0) ORDER BY Balance DESC",
+      "sql": "SELECT TOP 50 c.ID, c.Name, ISNULL(d.TotalDebt, 0) as TotalDebt FROM dbo.Client c LEFT JOIN (SELECT cid.ClientID, SUM(dt.Total) as TotalDebt FROM dbo.ClientInDebt cid JOIN dbo.Debt dt ON cid.DebtID = dt.ID WHERE cid.Deleted = 0 AND dt.Deleted = 0 GROUP BY cid.ClientID) d ON c.ID = d.ClientID WHERE c.Deleted = 0 AND d.TotalDebt > 0 ORDER BY TotalDebt DESC",
       "tables_used": [
         "Client",
-        "Debt",
-        "Payment"
+        "ClientInDebt",
+        "Debt"
       ]
     },
     {
@@ -435,7 +472,7 @@
         "нові борги за місяць",
         "місячні нові борги"
       ],
-      "sql": "SELECT SUM(Amount) as NewDebt, COUNT(*) as DebtCount FROM dbo.Debt WHERE Deleted = 0 AND MONTH(Created) = MONTH(GETDATE()) AND YEAR(Created) = YEAR(GETDATE())",
+      "sql": "SELECT SUM(Total) as NewDebt, COUNT(*) as DebtCount FROM dbo.Debt WHERE Deleted = 0 AND MONTH(Created) = MONTH(GETDATE()) AND YEAR(Created) = YEAR(GETDATE())",
       "tables_used": [
         "Debt"
       ]
@@ -493,7 +530,7 @@
         "фінансовий огляд",
         "грошовий підсумок"
       ],
-      "sql": "SELECT (SELECT SUM(oi.Qty * oi.PricePerItem) FROM dbo.OrderItem oi WHERE oi.Deleted = 0) as TotalRevenue, (SELECT SUM(Amount) FROM dbo.Payment WHERE Deleted = 0) as TotalPayments, (SELECT SUM(Amount) FROM dbo.Debt WHERE Deleted = 0 AND IsPaid = 0) as OutstandingDebt",
+      "sql": "SELECT (SELECT SUM(oi.Qty * oi.PricePerItem) FROM dbo.OrderItem oi WHERE oi.Deleted = 0) as TotalRevenue, (SELECT SUM(Amount) FROM dbo.Payment WHERE Deleted = 0) as TotalPayments, (SELECT SUM(Total) FROM dbo.Debt WHERE Deleted = 0) as OutstandingDebt",
       "tables_used": [
         "OrderItem",
         "Payment",

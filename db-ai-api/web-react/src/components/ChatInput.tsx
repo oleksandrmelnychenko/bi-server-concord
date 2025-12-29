@@ -13,7 +13,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, disabled = false }
     const textarea = textareaRef.current;
     if (textarea) {
       textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
     }
   }, []);
 
@@ -48,47 +48,57 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, disabled = false }
   );
 
   return (
-    <div className="p-3 pb-4 bg-white border-t border-surface-border">
+    <div className="flex-shrink-0 bg-gradient-to-t from-surface-primary via-surface-tertiary/70 to-transparent pt-4 pb-6 px-4">
       <div className="max-w-3xl mx-auto">
-        <div className={`
-          relative bg-white rounded-2xl border
-          ${disabled ? 'border-gray-200' : 'border-gray-300 hover:border-gray-400'}
-          focus-within:border-gray-400
-          transition-all duration-150
-        `}>
+        {/* Input Container */}
+        <div
+          className={`
+            relative rounded-2xl border shadow-lg
+            ${disabled
+              ? 'border-white/10 bg-surface-secondary/70'
+              : 'border-white/10 bg-surface-secondary hover:border-sky-300/60 focus-within:border-sky-400/80 focus-within:shadow-[0_0_0_1px_rgba(56,189,248,0.35)]'
+            }
+            transition-all duration-200
+          `}
+        >
           <textarea
             ref={textareaRef}
             value={value}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder="Напишіть ваше питання..."
+            placeholder="Message Concord Business Intelligent..."
             rows={1}
             disabled={disabled}
-            className="w-full bg-transparent px-4 py-3 pr-12 resize-none outline-none
-                     text-content-primary placeholder:text-content-light font-sans text-sm
+            className="w-full bg-transparent px-4 py-3.5 pr-14 resize-none outline-none
+                     text-slate-100 placeholder:text-slate-500 text-sm leading-relaxed
                      disabled:cursor-not-allowed disabled:opacity-60
-                     max-h-48"
+                     max-h-40"
           />
+
+          {/* Send Button */}
           <button
             onClick={handleSend}
             disabled={disabled || !value.trim()}
             className={`
-              absolute right-2 bottom-2 w-8 h-8 rounded-lg
-              flex items-center justify-center transition-all duration-150
+              absolute right-2.5 bottom-2.5 w-10 h-10 rounded-full
+              flex items-center justify-center transition-all duration-200 border
               ${value.trim() && !disabled
-                ? 'bg-black text-white hover:bg-gray-800'
-                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                ? 'border-sky-300/60 bg-sky-500 text-white shadow-md hover:bg-sky-600'
+                : 'border-white/10 bg-white/5 text-slate-500 cursor-not-allowed'
               }
             `}
+            aria-label="Send message"
           >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 2L11 13" />
-              <path d="M22 2L15 22L11 13L2 9L22 2Z" />
+            <svg className="w-4 h-4 thin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M4 12l15-7-6 15-2.5-5.5L4 12z" />
+              <path d="M11 14l8-9" />
             </svg>
           </button>
         </div>
-        <p className="text-center text-xs text-content-muted mt-2">
-          Пошук по базі даних ConcordDb з українською підтримкою
+
+        {/* Hint text */}
+        <p className="text-center text-xs text-slate-400 mt-3">
+          Enter to send. Shift + Enter for a new line.
         </p>
       </div>
     </div>

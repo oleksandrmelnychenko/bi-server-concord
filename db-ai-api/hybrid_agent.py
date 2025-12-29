@@ -5,21 +5,19 @@ Intelligently routes queries to either SQL generation or RAG search
 import json
 import re
 from typing import Dict, Any, Optional, Literal
-import ollama
 from utils.language_utils import detect_language, has_ukrainian, extract_ukrainian_keywords
 from rag_engine import RAGQueryEngine
-from db_pool import get_connection
-import pymssql
+from sql_agent import SQLAgent
 
 
 class HybridAgent:
     """Hybrid agent that routes between SQL and RAG."""
 
     def __init__(self,
-                 sql_model: str = "qwen2:7b",
-                 rag_model: str = "qwen2:7b",
+                 sql_model: str = "qwen2.5:14b",
+                 rag_model: str = "qwen2.5:14b",
                  sql_prompt_path: str = "prompts/sql_prompt_uk.txt",
-                 chroma_dir: str = "chroma_db"):
+                 chroma_dir: str = "chroma_db_full"):
         """
         Initialize Hybrid Agent.
 
@@ -30,7 +28,7 @@ class HybridAgent:
             chroma_dir: ChromaDB directory
         """
         print("\n" + "="*60)
-        print("🚀 INITIALIZING HYBRID AGENT")
+        print("INITIALIZING HYBRID AGENT")
         print("="*60 + "\n")
 
         self.sql_model = sql_model
@@ -40,22 +38,30 @@ class HybridAgent:
         with open(sql_prompt_path, "r", encoding="utf-8") as f:
             self.sql_prompt_template = f.read()
 
-        # Load schema
+        # Load schema (handle both wrapped and flat formats)
         with open("schema_cache.json", "r", encoding="utf-8") as f:
-            self.schema = json.load(f)
+            schema_data = json.load(f)
+            # Handle wrapped format: {tables: {...}, views: {...}}
+            if "tables" in schema_data:
+                self.schema = {**schema_data.get("tables", {}), **schema_data.get("views", {})}
+            else:
+                self.schema = schema_data
 
         # Load Ukrainian dictionary
         with open("dictionaries/uk_column_mapping.json", "r", encoding="utf-8") as f:
             self.uk_dictionary = json.load(f)
 
         # Initialize RAG engine
-        print("📦 Initializing RAG engine...")
+        print("Initializing RAG engine...")
         self.rag_engine = RAGQueryEngine(
             llm_model=rag_model,
             chroma_dir=chroma_dir
         )
 
-        print("\n✓ Hybrid Agent initialized\n")
+        print("Initializing SQL agent...")
+        self.sql_agent = SQLAgent(ollama_model=sql_model)
+
+        print("\n[OK] Hybrid Agent initialized\n")
 
     def classify_query(self, question: str) -> Dict[str, Any]:
         """
@@ -117,8 +123,8 @@ class HybridAgent:
             mode = "rag"
             confidence = 0.6 + (rag_score * 0.1)
         else:
-            # Default to RAG for ambiguous queries
-            mode = "rag"
+            # Default to SQL for ambiguous queries (RAG collection needs re-indexing)
+            mode = "sql"
             confidence = 0.5
 
         return {
@@ -139,44 +145,32 @@ class HybridAgent:
         Returns:
             SQL query and metadata
         """
-        # Build schema string (simplified)
-        schema_str = self._format_schema_for_prompt()
-
-        # Build prompt
-        prompt = self.sql_prompt_template.format(
-            schema=schema_str,
-            ukrainian_dictionary=json.dumps(self.uk_dictionary, ensure_ascii=False, indent=2),
-            question=question
-        )
-
-        # Generate SQL
         try:
-            response = ollama.generate(
-                model=self.sql_model,
-                prompt=prompt,
-                options={
-                    "temperature": 0.1,
-                    "top_p": 0.9
+            if self.sql_agent is None:
+                self.sql_agent = SQLAgent(ollama_model=self.sql_model)
+            result = self.sql_agent.generate_sql(question)
+            sql = result.get("sql")
+            if not sql:
+                return {
+                    "success": False,
+                    "sql": None,
+                    "model": self.sql_model,
+                    "error": "SQL generation returned empty output"
                 }
-            )
-
-            sql = response["response"].strip()
-
-            # Clean up SQL
-            sql = self._clean_sql(sql)
 
             return {
                 "success": True,
                 "sql": sql,
-                "model": self.sql_model,
+                "model": self.sql_agent.ollama_model,
                 "error": None
             }
 
         except Exception as e:
+            model_name = self.sql_agent.ollama_model if self.sql_agent else self.sql_model
             return {
                 "success": False,
                 "sql": None,
-                "model": self.sql_model,
+                "model": model_name,
                 "error": str(e)
             }
 
@@ -198,25 +192,23 @@ class HybridAgent:
                 "error": "Unsafe SQL query detected"
             }
 
-        conn = get_connection()
-        cursor = conn.cursor(as_dict=True)
-
         try:
-            cursor.execute(sql)
-            results = cursor.fetchall()
+            if self.sql_agent is None:
+                self.sql_agent = SQLAgent(ollama_model=self.sql_model)
+            result = self.sql_agent.execute_sql(sql)
 
-            # Convert to JSON-serializable format
-            json_results = []
-            for row in results:
-                json_row = {}
-                for key, value in row.items():
-                    json_row[key] = str(value) if value is not None else None
-                json_results.append(json_row)
+            if not result.get("success"):
+                return {
+                    "success": False,
+                    "results": None,
+                    "error": result.get("error", "SQL execution failed")
+                }
 
+            rows = result.get("rows") or []
             return {
                 "success": True,
-                "results": json_results,
-                "row_count": len(json_results),
+                "results": rows,
+                "row_count": result.get("row_count", len(rows)),
                 "error": None
             }
 
@@ -226,10 +218,6 @@ class HybridAgent:
                 "results": None,
                 "error": str(e)
             }
-
-        finally:
-            cursor.close()
-            conn.close()
 
     def query(self, question: str, mode: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -265,10 +253,10 @@ class HybridAgent:
     def _handle_sql_query(self, question: str, language: str,
                          classification: Dict[str, Any]) -> Dict[str, Any]:
         """Handle SQL-based query."""
-        # Generate SQL
+        # Generate SQL using SQLAgent for stronger validation
         sql_result = self.generate_sql(question)
 
-        if not sql_result["success"]:
+        if not sql_result.get("success"):
             return {
                 "question": question,
                 "language": language,
@@ -276,11 +264,23 @@ class HybridAgent:
                 "classification": classification,
                 "success": False,
                 "answer": "Вибачте, не вдалося згенерувати SQL запит.",
-                "error": sql_result["error"]
+                "error": sql_result.get("error", "SQL generation failed")
+            }
+
+        sql = sql_result.get("sql")
+        if not sql:
+            return {
+                "question": question,
+                "language": language,
+                "mode": "sql",
+                "classification": classification,
+                "success": False,
+                "answer": "Вибачте, не вдалося згенерувати SQL запит.",
+                "error": "SQL generation returned empty output"
             }
 
         # Execute SQL
-        exec_result = self.execute_sql(sql_result["sql"])
+        exec_result = self.execute_sql(sql)
 
         if not exec_result["success"]:
             return {
@@ -288,7 +288,7 @@ class HybridAgent:
                 "language": language,
                 "mode": "sql",
                 "classification": classification,
-                "sql": sql_result["sql"],
+                "sql": sql,
                 "success": False,
                 "answer": "Вибачте, помилка виконання SQL запиту.",
                 "error": exec_result["error"]
@@ -302,13 +302,12 @@ class HybridAgent:
             "language": language,
             "mode": "sql",
             "classification": classification,
-            "sql": sql_result["sql"],
+            "sql": sql,
             "results": exec_result["results"],
             "row_count": exec_result["row_count"],
             "success": True,
             "answer": answer
         }
-
     def _handle_rag_query(self, question: str, language: str,
                          classification: Dict[str, Any]) -> Dict[str, Any]:
         """Handle RAG-based query."""
@@ -352,17 +351,38 @@ class HybridAgent:
                    "\n".join(f"{i}. {list(row.values())[0]}" for i, row in enumerate(results[:10], 1))
 
     def _format_schema_for_prompt(self, max_tables: int = 50) -> str:
-        """Format schema for SQL prompt."""
+        """Format schema for SQL prompt with column types."""
         schema_parts = []
 
-        for i, (table_name, table_info) in enumerate(self.schema.items()):
-            if i >= max_tables:
+        # Priority tables for common queries
+        priority_tables = ["Client", "Order", "Product", "OrderItem", "User", "Region", "Warehouse"]
+
+        # Add priority tables first
+        for table_name in priority_tables:
+            if table_name in self.schema:
+                table_info = self.schema[table_name]
+                columns = table_info.get("columns", [])
+                col_strs = []
+                for col in columns[:15]:
+                    col_name = col.get("column_name") or col.get("name", "?")
+                    col_type = col.get("type", "").split()[0]  # Just base type
+                    col_strs.append(f"{col_name} {col_type}")
+                schema_parts.append(f"dbo.[{table_name}]: {', '.join(col_strs)}")
+
+        # Add remaining tables
+        count = len(schema_parts)
+        for table_name, table_info in self.schema.items():
+            if table_name in priority_tables:
+                continue
+            if count >= max_tables:
                 break
-
             columns = table_info.get("columns", [])
-            col_list = ", ".join([col["column_name"] for col in columns[:10]])
-
-            schema_parts.append(f"[dbo].[{table_name}] ({col_list})")
+            col_strs = []
+            for col in columns[:8]:
+                col_name = col.get("column_name") or col.get("name", "?")
+                col_strs.append(col_name)
+            schema_parts.append(f"dbo.[{table_name}]: {', '.join(col_strs)}")
+            count += 1
 
         return "\n".join(schema_parts)
 
@@ -375,6 +395,16 @@ class HybridAgent:
         # Remove comments
         sql = re.sub(r"--.*$", "", sql, flags=re.MULTILINE)
 
+        # Fix reserved word 'Order' - escape with brackets
+        # Match dbo.Order or dbo.[Order or just Order (not already escaped)
+        sql = re.sub(r'\bdbo\.Order\b(?!\])', 'dbo.[Order]', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'\bFROM\s+Order\b(?!\])', 'FROM [Order]', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'\bJOIN\s+Order\b(?!\])', 'JOIN [Order]', sql, flags=re.IGNORECASE)
+
+        # Remove NULLS FIRST/LAST (not supported in T-SQL) - handle with/without trailing semicolon
+        sql = re.sub(r'\s+NULLS\s+(FIRST|LAST)\s*;?\s*$', '', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'\s+NULLS\s+(FIRST|LAST)', '', sql, flags=re.IGNORECASE)
+
         # Clean whitespace
         sql = sql.strip()
 
@@ -382,13 +412,16 @@ class HybridAgent:
 
     def _is_sql_safe(self, sql: str) -> bool:
         """Check if SQL is safe to execute."""
-        sql_upper = sql.upper()
+        # Block dangerous keywords (as standalone words, not substrings)
+        # Use word boundary regex to avoid false positives like "deleted" matching "DELETE"
+        dangerous_patterns = [
+            r'\bDROP\b', r'\bDELETE\s+FROM\b', r'\bUPDATE\s+\w+\s+SET\b',
+            r'\bINSERT\s+INTO\b', r'\bALTER\b', r'\bCREATE\b',
+            r'\bTRUNCATE\b', r'\bEXEC\b', r'\bEXECUTE\b'
+        ]
 
-        # Block dangerous keywords
-        dangerous = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE", "TRUNCATE", "EXEC", "EXECUTE"]
-
-        for keyword in dangerous:
-            if keyword in sql_upper:
+        for pattern in dangerous_patterns:
+            if re.search(pattern, sql, flags=re.IGNORECASE):
                 return False
 
         return True
@@ -409,7 +442,7 @@ def main():
 
     # Query
     print("\n" + "="*60)
-    print("🔍 PROCESSING QUERY")
+    print("PROCESSING QUERY")
     print("="*60)
     print(f"Query: {args.query}\n")
 
@@ -417,7 +450,7 @@ def main():
 
     # Print results
     print("="*60)
-    print(f"📝 RESULT ({result['mode'].upper()} mode)")
+    print(f"RESULT ({result['mode'].upper()} mode)")
     print("="*60)
     print(f"Language: {result['language']}")
     print(f"Success: {result['success']}")
@@ -428,7 +461,7 @@ def main():
         print(f"SQL Query:\n{result['sql']}\n")
 
     if result.get("error"):
-        print(f"⚠️  Error: {result['error']}")
+        print(f"Error: {result['error']}")
 
 
 if __name__ == "__main__":

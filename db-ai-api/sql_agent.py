@@ -45,6 +45,7 @@ class SQLAgent:
         schema_extractor: Optional[SchemaExtractor] = None,
         table_selector: Optional[TableSelector] = None,
         query_example_retriever: Optional[QueryExampleRetriever] = None,
+        ollama_model: Optional[str] = None,
     ):
         self.engine = engine or create_engine(
             settings.database_url,
@@ -68,11 +69,14 @@ class SQLAgent:
         else:
             logger.warning("Query examples not available")
 
+        self.ollama_model = ollama_model or settings.ollama_model
+
         # Sync and async Ollama clients
         self.ollama_client = ollama.Client(host=settings.ollama_base_url)
         self.ollama_async_client = ollama.AsyncClient(host=settings.ollama_base_url)
 
         # Initialize JoinPathGraph for dynamic join path computation
+        schema: Optional[Dict[str, Any]] = None
         try:
             schema = self.schema_extractor.extract_full_schema(force_refresh=True)
             if not schema or not schema.get("tables"):
@@ -83,9 +87,9 @@ class SQLAgent:
             if stats["edge_count"] < 100:
                 logger.warning(f"JoinPathGraph has few edges ({stats['edge_count']}), FK extraction may have failed")
             # Precompute join templates (priority-ordered, capped via settings)
-            self.precomputed_join_templates = self._precompute_join_templates(
-                schema, max_pairs=settings.precompute_max_pairs
-            )
+            # Disable precompute for faster startup (compute on-demand instead)
+            self.precomputed_join_templates = {}
+            logger.info("Join templates will be computed on-demand (precompute disabled for fast startup)")
         except Exception as e:
             logger.error(f"Failed to initialize JoinPathGraph: {e}")
             self.join_graph = None  # Graceful degradation
@@ -95,9 +99,42 @@ class SQLAgent:
         self._relationships_cache: Optional[str] = None
         self._join_rulebook_cache: Optional[str] = None
 
+        # Schema index for validation
+        self._table_columns: Dict[str, set] = {}
+        self._fk_pairs: set = set()
+        if schema:
+            try:
+                self._build_schema_index(schema)
+            except Exception as e:
+                logger.warning(f"Failed to build schema index for validation: {e}")
+
     def _canonical_pair_key(self, t1: str, t2: str) -> str:
         """Stable key for unordered table pair."""
         return "||".join(sorted([normalize_table_name(t1), normalize_table_name(t2)]))
+
+    def _build_schema_index(self, schema: Dict[str, Any]) -> None:
+        """Build lookup maps for columns and FK pairs for validation."""
+        for table_name, info in schema.get("tables", {}).items():
+            norm = normalize_table_name(table_name)
+            cols = set(c.get("name", "").replace("[", "").replace("]", "") for c in info.get("columns", []))
+            self._table_columns[norm] = cols
+            for fk in info.get("foreign_keys", []):
+                parent_col = fk.get("columns", [None])[0]
+                ref_table = fk.get("referred_table", "")
+                ref_col = fk.get("referred_columns", [None])[0]
+                if parent_col and ref_table and ref_col:
+                    parent_col = parent_col.replace("[", "").replace("]", "")
+                    ref_table_norm = normalize_table_name(ref_table)
+                    ref_col = ref_col.replace("[", "").replace("]", "")
+                    self._fk_pairs.add((norm, parent_col, ref_table_norm, ref_col))
+                    # Allow reverse direction for validation convenience
+                    self._fk_pairs.add((ref_table_norm, ref_col, norm, parent_col))
+        # Include views so validation does not reject them as missing tables
+        for view_name, info in schema.get("views", {}).items():
+            norm = normalize_table_name(view_name)
+            cols = set(c.get("name", "").replace("[", "").replace("]", "") for c in info.get("columns", []))
+            self._table_columns[norm] = cols
+        logger.info(f"Schema index built: {len(self._table_columns)} tables, {len(self._fk_pairs)//2} FK edges")
 
     def _get_relationships_from_schema(self) -> str:
         """Generate TABLE RELATIONSHIPS dynamically from schema foreign keys."""
@@ -304,6 +341,10 @@ class SQLAgent:
             logger.debug(f"Skipping join templates: {len(tables) if tables else 0} tables selected")
             return ""
 
+        if not self.join_graph:
+            logger.debug("JoinPathGraph unavailable; skipping join templates")
+            return ""
+
         templates = []
 
         # Critical paths that are commonly needed (pre-compute for consistency)
@@ -397,6 +438,175 @@ directly. Do NOT invent alternative paths if a template exists below.
 """
         return header + "\n\n".join(templates)
 
+    def _contains_any(self, text: str, tokens: List[str]) -> bool:
+        """Return True if any token is present in text (case-insensitive)."""
+        text_lower = text.lower()
+        return any(token.lower() in text_lower for token in tokens)
+
+    def _has_cyrillic(self, text: str) -> bool:
+        """Detect Cyrillic characters in text."""
+        return any("\u0400" <= ch <= "\u04FF" for ch in text)
+
+    def _extract_tables_from_sql(self, sql: str) -> set:
+        """Extract normalized table names from FROM/JOIN clauses."""
+        tables = set()
+        for match in re.finditer(r'\b(?:FROM|JOIN)\s+(?:dbo\.)?\[?(\w+)\]?', sql, re.IGNORECASE):
+            tables.add(normalize_table_name(match.group(1)).lower())
+        return tables
+
+    def _infer_domain_filter(self, question: str) -> Optional[str]:
+        """Infer query domain for example retrieval filtering."""
+        q = question.lower()
+        if self._contains_any(q, [
+            "client", "clients", "customer", "customers",
+            "клієнт", "клієнти", "клиент", "клиенты",
+            "замовник", "замовники", "покупець", "покупці",
+            "покупатель", "покупатели",
+            # Client type keywords (ФОП, ТОВ, ПП)
+            "фоп", "тов", "пп",
+            # Buy/purchase verbs (all tenses)
+            "купляє", "купляють", "купує", "купують",
+            "купляв", "купляли", "купив", "купили", "закупив", "закупили",
+            # Region names (for region-based purchases)
+            "київ", "львів", "одеса", "харків", "дніпро", "хмельницьк",
+            "регіон", "регіони", "область", "області",
+        ]):
+            return "customers"
+        if self._contains_any(q, [
+            "product", "products",
+            "\u0442\u043e\u0432\u0430\u0440", "\u0442\u043e\u0432\u0430\u0440\u0438",
+            "\u043f\u0440\u043e\u0434\u0443\u043a\u0442", "\u043f\u0440\u043e\u0434\u0443\u043a\u0442\u0438",
+            "\u043d\u043e\u043c\u0435\u043d\u043a\u043b\u0430\u0442\u0443\u0440",
+        ]):
+            return "products"
+        if self._contains_any(q, [
+            "sale", "sales", "revenue", "\u043e\u0431\u043e\u0440\u043e\u0442",
+            "\u0432\u0438\u0440\u0443\u0447", "\u0432\u044b\u0440\u0443\u0447", "\u043f\u0440\u043e\u0434\u0430\u0436",
+        ]):
+            return "sales"
+        # Debt/financial domain - борги, боржники, платежі
+        if self._contains_any(q, [
+            "debt", "debts", "debtor", "debtors", "payment", "payments",
+            "receivable", "receivables", "owe", "owed", "owing",
+            "\u0431\u043e\u0440\u0433", "\u0431\u043e\u0440\u0433\u0438",  # борг, борги
+            "\u0431\u043e\u0440\u0436\u043d\u0438\u043a", "\u0431\u043e\u0440\u0436\u043d\u0438\u043a\u0438",  # боржник, боржники
+            "\u0437\u0430\u0431\u043e\u0440\u0433\u043e\u0432\u0430\u043d", # заборгованість
+            "\u043f\u043b\u0430\u0442\u0456\u0436", "\u043f\u043b\u0430\u0442\u0435\u0436",  # платіж, платеж
+            "\u0432\u0438\u043d\u0435\u043d", "\u0432\u0438\u043d\u043d\u0438\u0439",  # винен, винний
+        ]):
+            return "financial"
+        # Bank domain - банки
+        if self._contains_any(q, [
+            "bank", "banks",
+            "\u0431\u0430\u043d\u043a", "\u0431\u0430\u043d\u043a\u0438", "\u0431\u0430\u043d\u043a\u0456\u0432",  # банк, банки, банків
+        ]):
+            return "customers"  # Bank is in customers domain
+        return None
+
+    def _build_intent_hints(self, question: str) -> str:
+        """Build intent hints to steer SQL generation."""
+        q = question.lower()
+        hints = []
+        client_tokens = [
+            "client", "clients", "customer", "customers",
+            "\u043a\u043b\u0456\u0454\u043d\u0442", "\u043a\u043b\u0456\u0454\u043d\u0442\u0438",
+            "\u043a\u043b\u0438\u0435\u043d\u0442", "\u043a\u043b\u0438\u0435\u043d\u0442\u044b",
+            "\u0437\u0430\u043c\u043e\u0432\u043d\u0438\043a", "\u0437\u0430\u043c\u043e\u0432\u043d\u0438\043a\u0438",
+            "\u043f\u043e\u043a\u0443\u043f\u0435\u0446\u044c", "\u043f\u043e\u043a\u0443\u043f\u0446\u0456",
+            "\u043f\u043e\u043a\u0443\u043f\u0430\u0442\u0435\u043b\u044c", "\u043f\u043e\u043a\u0443\u043f\u0430\u0442\u0435\u043b\u0438",
+        ]
+        region_tokens = [
+            "region", "oblast", "\u043e\u0431\u043b", "\u043e\u0431\u043b\u0430\u0441\u0442\u044c", "\u043e\u0431\u043b\u0430\u0441\u0442\u0438",
+            "\u0440\u0435\u0433\u0456\u043e\u043d", "\u0440\u0435\u0433\u0438\u043e\u043d",
+            # Ukrainian region names (using stems for case-insensitive matching)
+            # киє matches: київ, києві, києва, києво etc.
+            "киє", "київ", "льв", "львів", "одес", "одеса",
+            "харк", "харків", "дніпр", "дніпро", "хмельницьк",
+            "kyiv", "lviv", "odesa", "kharkiv", "dnipro", "khmelnytskyi",
+        ]
+        list_tokens = [
+            "show", "list", "\u043f\u043e\u043a\u0430\u0436\u0438", "\u043f\u043e\u043a\u0430\u0437\u0430\u0442\u0438", "\u0432\u0438\u0432\u0435\u0434\u0438",
+            "\u0441\u043f\u0438\u0441\u043e\u043a", "\u043f\u0435\u0440\u0435\u043b\u0456\u043a",
+        ]
+
+        # Debt-related tokens - борги, боржники
+        debt_tokens = [
+            "debt", "debts", "debtor", "debtors", "owe", "owed", "owing",
+            "receivable", "receivables",
+            "\u0431\u043e\u0440\u0433", "\u0431\u043e\u0440\u0433\u0438",  # борг, борги
+            "\u0431\u043e\u0440\u0436\u043d\u0438\u043a", "\u0431\u043e\u0440\u0436\u043d\u0438\u043a\u0438",  # боржник, боржники
+            "\u0437\u0430\u0431\u043e\u0440\u0433\u043e\u0432\u0430\u043d",  # заборгованість
+            "\u0432\u0438\u043d\u0435\u043d", "\u0432\u0438\u043d\u043d\u0438\u0439",  # винен, винний
+        ]
+
+        if self._contains_any(q, client_tokens):
+            hints.append("CLIENT QUERIES: Use dbo.Client table! For name search use: WHERE Name LIKE N'%name%' AND Deleted = 0. For counting: SELECT COUNT(*) FROM dbo.Client WHERE ... Use N prefix for Unicode strings!")
+        if self._contains_any(q, region_tokens):
+            hints.append("REGION QUERIES: Join dbo.Region ON Client.RegionID = Region.ID. CRITICAL: Region.Name contains 2-LETTER CODES, NOT full names! Map: Київ=KI, Львів=LV, Одеса=OD, Харків=XV, Хмельницький=XM, Дніпро=DP. Example: WHERE Region.Name = 'XM' for Хмельницький.")
+        if self._contains_any(q, list_tokens) and self._contains_any(q, client_tokens):
+            hints.append("For client lists, return Client.ID and Client.Name (and Region.Name when filtering by region).")
+        # CRITICAL: Debt queries must use Debt and ClientInDebt tables, NOT Order/OrderItem!
+        if self._contains_any(q, debt_tokens):
+            hints.append("DEBT QUERIES: Use dbo.Debt and dbo.ClientInDebt tables! Join path: Client -> ClientInDebt (ClientID) -> Debt (DebtID). Use Debt.Total for amounts. DO NOT use Order/OrderItem for debt queries!")
+
+        # Bank queries - банки
+        bank_tokens = [
+            "bank", "banks",
+            "банк", "банки", "банків",  # bank, banks
+        ]
+        if self._contains_any(q, bank_tokens):
+            hints.append("BANK QUERIES: Use dbo.Bank table! Columns: ID, Name, MfoCode, EdrpouCode, City, Address, Phones. Simple query: SELECT ID, Name, City, MfoCode FROM dbo.Bank WHERE Deleted = 0 ORDER BY Name")
+
+        if not hints:
+            return ""
+
+        return "\n".join(f"- {hint}" for hint in hints)
+
+    def _validate_intent_alignment(self, question: str, sql: str) -> None:
+        """Validate SQL matches obvious intent cues in the question."""
+        q = question.lower()
+        tables = self._extract_tables_from_sql(sql)
+        logger.debug(f"[Intent Validation] Question: {question[:50]}..., Tables: {tables}")
+
+        client_tokens = [
+            "client", "clients", "customer", "customers",
+            "\u043a\u043b\u0456\u0454\u043d\u0442", "\u043a\u043b\u0456\u0454\u043d\u0442\u0438",
+            "\u043a\u043b\u0438\u0435\u043d\u0442", "\u043a\u043b\u0438\u0435\u043d\u0442\u044b",
+            "\u0437\u0430\u043c\u043e\u0432\u043d\u0438\u043a", "\u0437\u0430\u043c\u043e\u0432\u043d\u0438\u043a\u0438",
+            "\u043f\u043e\u043a\u0443\u043f\u0435\u0446\u044c", "\u043f\u043e\u043a\u0443\u043f\u0446\u0456",
+            "\u043f\u043e\u043a\u0443\u043f\u0430\u0442\u0435\u043b\u044c", "\u043f\u043e\u043a\u0443\u043f\u0430\u0442\u0435\u043b\u0438",
+        ]
+        region_tokens = [
+            "region", "oblast", "\u043e\u0431\u043b", "\u043e\u0431\u043b\u0430\u0441\u0442\u044c", "\u043e\u0431\u043b\u0430\u0441\u0442\u0438",
+            "\u0440\u0435\u0433\u0456\u043e\u043d", "\u0440\u0435\u0433\u0438\u043e\u043d",
+            # Ukrainian region names (using stems for case-insensitive matching)
+            # киє matches: київ, києві, києва, києво etc.
+            "киє", "київ", "льв", "львів", "одес", "одеса",
+            "харк", "харків", "дніпр", "дніпро", "хмельницьк",
+            "kyiv", "lviv", "odesa", "kharkiv", "dnipro", "khmelnytskyi",
+        ]
+
+        # Check if any table contains the required keyword (e.g., "clientagreement" contains "client")
+        has_client_table = any("client" in t for t in tables)
+        has_region_table = any("region" in t for t in tables)
+
+        if self._contains_any(q, client_tokens) and not has_client_table:
+            raise ValueError("Intent mismatch: client query without Client table")
+        if self._contains_any(q, region_tokens) and not has_region_table:
+            raise ValueError("Intent mismatch: region query without Region table")
+
+        # Bank validation - банк, банки
+        bank_tokens = [
+            "bank", "banks",
+            "банк", "банки", "банків",
+        ]
+        has_bank_table = any("bank" in t for t in tables)
+        has_bank_intent = self._contains_any(q, bank_tokens)
+        logger.debug(f"[Bank Validation] has_bank_intent={has_bank_intent}, has_bank_table={has_bank_table}")
+        if has_bank_intent and not has_bank_table:
+            logger.warning(f"Bank intent detected but no Bank table! Raising validation error.")
+            raise ValueError("Intent mismatch: bank query without Bank table - use dbo.Bank!")
+
     def generate_sql(self, question: str, max_retries: int = 2, include_explanation: bool = False) -> Dict[str, Any]:
         logger.info(f"Generating SQL for: {question}")
 
@@ -405,8 +615,13 @@ directly. Do NOT invent alternative paths if a template exists below.
         if cache_key in self._sql_generation_cache:
             cached_sql, cached_time = self._sql_generation_cache[cache_key]
             if time.time() - cached_time < self.SQL_GENERATION_CACHE_TTL:
-                logger.info(f"SQL generation cache hit for: {question[:50]}...")
-                return {"question": question, "sql": cached_sql, "attempts": 0, "cached": True}
+                try:
+                    self._validate_intent_alignment(question, cached_sql)
+                    logger.info(f"SQL generation cache hit for: {question[:50]}...")
+                    return {"question": question, "sql": cached_sql, "attempts": 0, "cached": True}
+                except Exception as cache_err:
+                    logger.warning(f"Cached SQL failed intent validation, regenerating: {cache_err}")
+                    del self._sql_generation_cache[cache_key]
 
         # Use full schema context (all 300+ tables in compact form + detailed relevant tables)
         context = self.table_selector.get_full_schema_context(question)
@@ -418,12 +633,14 @@ directly. Do NOT invent alternative paths if a template exists below.
             try:
                 prompt = self._build_prompt(question, context, attempts, selected_tables)
                 response = self.ollama_client.generate(
-                    model=settings.ollama_model,
+                    model=self.ollama_model,
                     prompt=prompt,
                     options=self.LLM_OPTIONS
                 )
                 sql_query = self._extract_sql(response["response"])
+                sql_query = self._fix_transliterated_names(sql_query, question)
                 self._validate_sql(sql_query)
+                self._validate_intent_alignment(question, sql_query)
                 logger.info(f"Generated SQL on attempt {attempt + 1}")
                 break
             except Exception as e:
@@ -507,8 +724,13 @@ directly. Do NOT invent alternative paths if a template exists below.
         if cache_key in self._sql_generation_cache:
             cached_sql, cached_time = self._sql_generation_cache[cache_key]
             if time.time() - cached_time < self.SQL_GENERATION_CACHE_TTL:
-                logger.info(f"SQL generation cache hit (async) for: {question[:50]}...")
-                return {"question": question, "sql": cached_sql, "attempts": 0, "cached": True}
+                try:
+                    self._validate_intent_alignment(question, cached_sql)
+                    logger.info(f"SQL generation cache hit (async) for: {question[:50]}...")
+                    return {"question": question, "sql": cached_sql, "attempts": 0, "cached": True}
+                except Exception as cache_err:
+                    logger.warning(f"Cached SQL failed intent validation (async), regenerating: {cache_err}")
+                    del self._sql_generation_cache[cache_key]
 
         # Use full schema context (all 300+ tables in compact form + detailed relevant tables)
         context = self.table_selector.get_full_schema_context(question)
@@ -521,12 +743,14 @@ directly. Do NOT invent alternative paths if a template exists below.
                 prompt = self._build_prompt(question, context, attempts, selected_tables)
                 # ASYNC Ollama call - doesn't block other requests
                 response = await self.ollama_async_client.generate(
-                    model=settings.ollama_model,
+                    model=self.ollama_model,
                     prompt=prompt,
                     options=self.LLM_OPTIONS
                 )
                 sql_query = self._extract_sql(response["response"])
+                sql_query = self._fix_transliterated_names(sql_query, question)
                 self._validate_sql(sql_query)
+                self._validate_intent_alignment(question, sql_query)
                 logger.info(f"Generated SQL on attempt {attempt + 1}")
                 break
             except Exception as e:
@@ -555,6 +779,14 @@ directly. Do NOT invent alternative paths if a template exists below.
                 None, lambda: self.execute_sql(sql_result["sql"], max_rows)
             )
         return response
+
+    # Direct joins that are known to be wrong (force a retry)
+    FORBIDDEN_DIRECT_JOIN_PAIRS = {
+        frozenset({"client", "order"}),
+        frozenset({"client", "debt"}),
+        frozenset({"order", "product"}),
+        frozenset({"client", "sale"}),
+    }
 
     # Critical business rules (NOT in schema - must be hardcoded)
     CRITICAL_RULES = """
@@ -609,7 +841,16 @@ COLUMN NAME RULES:
         if self.example_retriever.is_available():
             try:
                 # 1. Semantic search examples (based on question text)
-                similar_examples = self.example_retriever.find_similar_with_correction(question, top_k=3)
+                domain_filter = self._infer_domain_filter(question)
+                min_score = 0.35 if self._has_cyrillic(question) else 0.45
+                # Use find_similar instead of find_similar_with_correction
+                # The correction pipeline has encoding issues with Cyrillic text
+                similar_examples = self.example_retriever.find_similar(
+                    question,
+                    top_k=3,
+                    domain_filter=domain_filter,
+                    min_score=min_score,
+                )
 
                 # 2. Table-based examples (based on selected tables) - NEW
                 table_examples = []
@@ -635,10 +876,18 @@ COLUMN NAME RULES:
                         all_examples.append(ex)
                         seen_ids.add(ex.get("id"))
 
-                if all_examples:
-                    examples_section = self.example_retriever.format_examples_for_prompt(all_examples, include_ukrainian=True)
-                    avg_score = sum(e.get("similarity_score", 0) for e in all_examples) / len(all_examples)
-                    logger.info(f"Retrieved {len(all_examples)} examples ({len(similar_examples)} semantic + {len(table_examples)} table-based, avg score: {avg_score:.2f})")
+                filtered_examples = []
+                for ex in all_examples:
+                    score = ex.get("similarity_score", 0)
+                    if score >= min_score:
+                        filtered_examples.append(ex)
+
+                if filtered_examples:
+                    examples_section = self.example_retriever.format_examples_for_prompt(filtered_examples, include_ukrainian=True)
+                    avg_score = sum(e.get("similarity_score", 0) for e in filtered_examples) / len(filtered_examples)
+                    logger.info(f"Retrieved {len(filtered_examples)} examples ({len(similar_examples)} semantic + {len(table_examples)} table-based, avg score: {avg_score:.2f})")
+                else:
+                    logger.info("No example matches above similarity threshold; skipping examples")
             except Exception as e:
                 logger.error(f"Failed to retrieve examples: {e}")
 
@@ -649,39 +898,8 @@ COLUMN NAME RULES:
             for attempt in previous_attempts[-2:]:  # Last 2 attempts
                 retry_context += f"- SQL: {attempt.get('sql', 'N/A')}\n  Error: {attempt.get('error', 'N/A')}\n"
 
-        # Get dynamic JOIN templates based on selected tables (NEW - replaces flat FK list)
-        join_templates = ""
-        if selected_tables and self.join_graph:
-            try:
-                join_templates = self._get_join_templates_for_tables(selected_tables)
-                if not join_templates:
-                    logger.debug(f"No join templates generated for tables: {selected_tables[:5]}")
-            except Exception as e:
-                logger.error(f"Failed to generate join templates: {e}")
-                join_templates = ""
-
-        # Precomputed join templates for selected pairs (fast path, capped)
-        precomputed_templates = ""
-        if selected_tables and self.precomputed_join_templates:
-            # use per-query cap from settings to preserve prompt space
-            precomputed_templates = self._get_precomputed_join_templates_for_tables(
-                selected_tables,
-                limit=settings.precomputed_per_query_limit
-            )
-
-        # Full join rulebook (FK edges with aliases) for redundancy
-        join_rulebook = self._get_join_rulebook(max_chars=settings.join_rulebook_max_chars)
-
-        # Keep flat relationships as fallback for less common tables
-        relationships = self._get_relationships_from_schema()
-
-        # Combine detailed schema with explicit FK relationship map so the LLM
-        # always sees how tables connect (helps it pick correct join keys)
+        # Schema context with limited join guidance for selected tables
         schema_section = context
-        if relationships:
-            schema_section = f"""{context}
-
-{relationships}"""
 
         # Optional prompt budget guardrail
         def _truncate_to_budget(text: str, budget: int) -> str:
@@ -689,35 +907,33 @@ COLUMN NAME RULES:
                 return text[:budget] + "\n-- TRUNCATED TO FIT PROMPT BUDGET --"
             return text
 
-        # Build prompt body
-        prompt_body = f"""You are a Microsoft SQL Server T-SQL expert for ConcordDb database.
+        intent_hints = self._build_intent_hints(question)
+        intent_section = f"\nINTENT HINTS:\n{intent_hints}\n" if intent_hints else ""
 
-Standard aliases: Client=c, ClientAgreement=ca, Order=o, OrderItem=oi, Product=p, Sale=s, ProductAvailability=pa, Storage=st, Region=r, User=u, Payment=pay, Invoice=inv, Debt=d
+        join_templates = ""
+        if selected_tables:
+            join_templates = self._get_join_templates_for_tables(selected_tables[:4])
+        join_budget = getattr(settings, "join_rulebook_max_chars", None)
+        if join_templates and join_budget:
+            join_templates = _truncate_to_budget(join_templates, join_budget)
+        join_section = f"\n{join_templates}\n" if join_templates else ""
 
-{join_templates}
-{precomputed_templates}
-{join_rulebook}
-{self.CRITICAL_RULES}
+        # Build prompt body - instruction first, focused context
+        prompt_body = f"""Generate a T-SQL query for this question. Output ONLY the SQL, nothing else.
 
-DATABASE SCHEMA (3 tiers):
-- TIER 1: Core tables with FULL column details (use these first)
-- TIER 2: Relevant tables with KEY columns only (ID, FKs, important fields)
-- TIER 3: Other tables as compact list - TableName(col1, col2...) format
-
-{schema_section}
-
-SQL RULES:
-1. Use ONLY columns listed above - NEVER invent or guess column names
-2. Use TOP N instead of LIMIT
-3. Use dbo.[Order] with brackets (Order is reserved word)
-4. Add WHERE alias.Deleted = 0 for active records
-5. Use N'text' prefix for Ukrainian text in LIKE patterns
-
-{examples_section}
-{retry_context}
 QUESTION: {question}
 
-Generate ONLY the SQL query, no explanation:
+RULES:
+- Use TOP N (not LIMIT)
+- Use dbo.[Order] with brackets
+- Add WHERE alias.Deleted = 0
+- Order has NO ClientID! Use: Order.ClientAgreementID -> ClientAgreement.ClientID -> Client
+{intent_section}{join_section}
+{examples_section}
+SCHEMA:
+{schema_section}
+{retry_context}
+SQL:
 """
         # Apply prompt budget if configured
         prompt_budget = getattr(settings, "prompt_max_chars", None)
@@ -740,6 +956,19 @@ Generate ONLY the SQL query, no explanation:
 
     # Common column name hallucinations and their corrections
     COLUMN_FIXES = {
+        # Bank table hallucinations (LegalAddress doesn't exist, use Address)
+        r'\bb\.LegalAddress\b': 'b.Address',
+        r'\bBank\.LegalAddress\b': 'Bank.Address',
+        # Debt table hallucinations (Amount/IsPaid don't exist, use Total)
+        r'\bd\.Amount\b': 'd.Total',
+        r'\bDebt\.Amount\b': 'Debt.Total',
+        r'\bSUM\(d\.Amount\)': 'SUM(d.Total)',
+        r'\bSUM\(Debt\.Amount\)': 'SUM(Debt.Total)',
+        # IsPaid doesn't exist - remove entire condition or replace
+        r'\s+AND\s+d\.IsPaid\s*=\s*0\b': '',  # Remove "AND d.IsPaid = 0"
+        r'\s+AND\s+d\.IsPaid\s*=\s*1\b': '',  # Remove "AND d.IsPaid = 1"
+        r'\bd\.IsPaid\s*=\s*0\b': 'd.Total > 0',  # Replace standalone with Total > 0
+        r'\bd\.IsPaid\s*=\s*1\b': 'd.Total = 0',  # Replace standalone with Total = 0
         # Client table hallucinations
         r'\bLegalassment\b': 'LegalAddress',
         r'\blegalassment\b': 'LegalAddress',
@@ -749,11 +978,11 @@ Generate ONLY the SQL query, no explanation:
         r'\bActualAdress\b': 'ActualAddress',
         r'\bClientName\b': 'Name',
         r'\bclientname\b': 'Name',
-        r'\bAddress\b(?!\s*LIKE)': 'LegalAddress',  # Generic Address -> LegalAddress
+        r'\bc\.Address\b(?!\s*LIKE)': 'c.LegalAddress',  # Client.Address -> LegalAddress (not Bank!)
         r'\bPhone\b': 'MobileNumber',  # Phone -> MobileNumber
         r'\bphone\b': 'MobileNumber',
         r'\bTelephone\b': 'MobileNumber',
-        r'\bCity\b': 'LegalAddress',  # City doesn't exist, use LegalAddress
+        r'\bc\.City\b': 'c.LegalAddress',  # Client.City doesn't exist, use LegalAddress (not Bank!)
         r'\bEmail\b': 'EmailAddress',  # Email -> EmailAddress
         r'\bemail\b': 'EmailAddress',
         # Product table hallucinations
@@ -770,11 +999,17 @@ Generate ONLY the SQL query, no explanation:
 
     def _fix_sql_dialect(self, sql: str) -> str:
         """Fix PostgreSQL/MySQL syntax to T-SQL and correct hallucinated column names."""
+        # First, convert any Cyrillic region codes to Latin (e.g., 'Хм' -> 'XM')
+        sql = self._fix_cyrillic_region_codes(sql)
         # Fix duplicate WHERE keyword: "WHERE WHERE.Deleted" -> "WHERE Deleted"
         original = sql
         sql = re.sub(r'\bWHERE\s+WHERE\.', 'WHERE ', sql, flags=re.IGNORECASE)
-        if 'WHERE WHERE' in original:
-            logger.debug(f"WHERE WHERE fix: '{original[:100]}' -> '{sql[:100]}'")
+        # Fix "AND WHERE.Deleted" -> "AND Deleted" (LLM sometimes uses WHERE as table alias)
+        sql = re.sub(r'\bAND\s+WHERE\.', 'AND ', sql, flags=re.IGNORECASE)
+        if 'WHERE.' in original:
+            logger.debug(f"WHERE alias fix: '{original[:100]}' -> '{sql[:100]}'")
+        # Convert ILIKE to LIKE (PostgreSQL -> T-SQL)
+        sql = re.sub(r"\bILIKE\b", "LIKE", sql, flags=re.IGNORECASE)
         # Convert LIMIT to TOP
         limit_match = re.search(r"\bLIMIT\s+(\d+)\s*$", sql, re.IGNORECASE)
         if limit_match:
@@ -795,19 +1030,24 @@ Generate ONLY the SQL query, no explanation:
         sql = self._fix_order_client_join(sql)
         # Fix Client.Region column hallucination
         sql = self._fix_region_column(sql)
+        # Fix incorrect Debt.ClientID join patterns (LLM hallucination)
+        sql = self._fix_debt_client_join(sql)
         return sql.strip()
 
     def _fix_ambiguous_deleted(self, sql: str) -> str:
         """Fix unqualified 'Deleted' column references by inferring table alias."""
         # Find all table aliases used in the query
-        alias_pattern = r'\b(?:FROM|JOIN)\s+(?:dbo\.)?(\[?\w+\]?)\s+(?:AS\s+)?(\w+)\b'
+        # Use negative lookahead to avoid matching SQL keywords as aliases
+        alias_pattern = r'\b(?:FROM|JOIN)\s+(?:dbo\.)?(\[?\w+\]?)\s+(?:AS\s+)?(?!WHERE|AND|OR|ON|LEFT|RIGHT|INNER|OUTER|GROUP|ORDER|HAVING)(\w+)\b'
         aliases = re.findall(alias_pattern, sql, re.IGNORECASE)
 
         if not aliases:
+            # No aliases defined - remove any alias prefixes from Deleted (e.g., c.Deleted -> Deleted)
+            sql = re.sub(r'\b\w+\.Deleted\s*=', 'Deleted =', sql, flags=re.IGNORECASE)
             return sql
 
-        # Get first alias (usually main table)
-        first_alias = aliases[0][1] if aliases[0][1] else aliases[0][0][0].lower()
+        # Get first alias (usually main table), or use first letter of table name
+        first_alias = aliases[0][1] if aliases[0][1] else aliases[0][0].replace('[', '').replace(']', '')[0].lower()
 
         # Fix "WHERE Deleted = 0" without alias
         sql = re.sub(
@@ -865,9 +1105,153 @@ Generate ONLY the SQL query, no explanation:
             flags=re.IGNORECASE
         )
 
+        # Fix: JOIN Order o ON o.ID = c.ClientID (completely wrong - Client has ID, not ClientID)
+        # This is a common LLM hallucination where it tries to join Order directly to Client
+        # The fix inserts ClientAgreement as the intermediary
+        sql = re.sub(
+            r'JOIN\s+dbo\.\[?Order\]?\s+(\w+)\s+ON\s+\.ID\s*=\s*(\w+)\.ClientID',
+            r'JOIN dbo.ClientAgreement ca ON ca.ClientID = .ID JOIN dbo.[Order]  ON .ClientAgreementID = ca.ID',
+            sql,
+            flags=re.IGNORECASE
+        )
+
         if sql != original:
             logger.debug(f"ClientAgreement join fix applied: {sql[:150]}...")
 
+        return sql
+
+    # Cyrillic to Latin region code mapping
+    CYRILLIC_TO_LATIN_REGIONS = {
+        'ХМ': 'XM', 'Хм': 'XM', 'хм': 'XM',  # Khmelnytskyi
+        'КИ': 'KI', 'Ки': 'KI', 'ки': 'KI', 'КІ': 'KI', 'Кі': 'KI',  # Kyiv
+        'ЛВ': 'LV', 'Лв': 'LV', 'лв': 'LV',  # Lviv
+        'ОД': 'OD', 'Од': 'OD', 'од': 'OD',  # Odesa
+        'ДН': 'DN', 'Дн': 'DN', 'дн': 'DN',  # Dnipro
+        'ХН': 'XN', 'Хн': 'XN', 'хн': 'XN',  # Kherson
+        'ХВ': 'XV', 'Хв': 'XV', 'хв': 'XV',  # Kharkiv
+        'ВІ': 'VI', 'Ві': 'VI', 'ві': 'VI', 'ВИ': 'VI',  # Vinnytsia
+        'ВЛ': 'VL', 'Вл': 'VL', 'вл': 'VL',  # Volyn
+        'ЗП': 'ZP', 'Зп': 'ZP', 'зп': 'ZP',  # Zaporizhzhia
+        'ЗК': 'ZK', 'Зк': 'ZK', 'зк': 'ZK',  # Zakarpattia
+        'ІФ': 'IF', 'Іф': 'IF', 'іф': 'IF',  # Ivano-Frankivsk
+        'ТЕ': 'TE', 'Те': 'TE', 'те': 'TE',  # Ternopil
+        'РІ': 'RI', 'Рі': 'RI', 'рі': 'RI', 'РИ': 'RI',  # Rivne
+        'СМ': 'SM', 'См': 'SM', 'см': 'SM',  # Sumy
+        'ЧЕ': 'CE', 'Че': 'CE', 'че': 'CE',  # Cherkasy
+        'ЧК': 'CK', 'Чк': 'CK', 'чк': 'CK',  # Chernihiv (actually CN)
+        'ЧН': 'CN', 'Чн': 'CN', 'чн': 'CN',  # Chernihiv
+        'ПА': 'PA', 'Па': 'PA', 'па': 'PA',  # Poltava
+        'МІ': 'MI', 'Мі': 'MI', 'мі': 'MI', 'МИ': 'MI',  # Mykolaiv
+        'КД': 'KD', 'Кд': 'KD', 'кд': 'KD',  # Kirovohrad
+        'ДП': 'DP', 'Дп': 'DP', 'дп': 'DP',  # Dnipropetrovsk
+        'ЛК': 'LK', 'Лк': 'LK', 'лк': 'LK',  # Luhansk
+        'ГТ': 'GT', 'Гт': 'GT', 'гт': 'GT',  # Zhytomyr (GT code)
+    }
+
+    def _fix_cyrillic_region_codes(self, sql: str) -> str:
+        """Convert Cyrillic region codes to Latin in SQL."""
+        for cyrillic, latin in self.CYRILLIC_TO_LATIN_REGIONS.items():
+            # Replace in string literals: 'ХМ' -> 'XM', N'ХМ' -> N'XM'
+            sql = sql.replace(f"'{cyrillic}'", f"'{latin}'")
+            sql = sql.replace(f"'{cyrillic}%'", f"'{latin}%'")
+            sql = sql.replace(f"'%{cyrillic}'", f"'%{latin}'")
+            sql = sql.replace(f"'%{cyrillic}%'", f"'%{latin}%'")
+        return sql
+
+    def _fix_transliterated_names(self, sql: str, question: str) -> str:
+        """Restore Cyrillic names from original question that LLM may have transliterated.
+
+        Example: Question has 'Луньов Микола' but LLM generates LIKE '%Lunov Mikola%'
+        This method extracts the Cyrillic name from question and replaces the Latin version.
+        """
+        # Extract proper names and company names from question
+        # Pattern 1: Capitalized words like "Луньов Микола"
+        name_pattern = r"[А-ЯІЇЄҐ][а-яіїєґ']+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ']+)+"
+        potential_names = re.findall(name_pattern, question)
+        
+        # Pattern 2: All-caps company names like "УКР АГРО СПЕЦ ТРЕЙД ТОВ"
+        company_pattern = r"[А-ЯІЇЄҐ]{2,}(?:\s+[А-ЯІЇЄҐ]{2,})+"
+        for match in re.finditer(company_pattern, question):
+            name = match.group(0)
+            if name not in potential_names and len(name) >= 5:
+                potential_names.append(name)
+        
+        # Pattern 3: Single capitalized words with 4+ chars
+        single_name_pattern = r"([А-ЯІЇЄҐ][а-яіїєґ']{3,})"
+        for match in re.finditer(single_name_pattern, question):
+            name = match.group(1)
+            if name not in potential_names:
+                potential_names.append(name)
+
+        if not potential_names:
+            return sql
+
+        # Map first Cyrillic letter to expected Latin transliteration
+        cyrillic_to_latin_first = {
+            'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e',
+            'є': 'y', 'ж': 'z', 'з': 'z', 'и': 'y', 'і': 'i', 'ї': 'y',
+            'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o',
+            'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f',
+            'х': 'k', 'ц': 't', 'ч': 'c', 'ш': 's', 'щ': 's', 'ь': '',
+            'ю': 'y', 'я': 'y',
+        }
+
+        # Find Latin strings in LIKE clauses
+        like_pattern = r"LIKE\s+N?'%?([^']+)%?'"
+        for match in re.finditer(like_pattern, sql, re.IGNORECASE):
+            latin_value = match.group(1)
+
+            # Skip if it's already Cyrillic or too short
+            if re.search(r'[А-Яа-яІЇЄҐіїєґ]', latin_value) or len(latin_value) < 3:
+                continue
+
+            # Try to match with potential names
+            for cyrillic_name in potential_names:
+                latin_lower = latin_value.lower().replace(' ', '')
+                cyrillic_words = cyrillic_name.lower().split()
+
+                # Check if first letters match (quick heuristic)
+                if cyrillic_words and latin_lower:
+                    first_cyrillic = cyrillic_words[0][0] if cyrillic_words[0] else ''
+                    first_latin = latin_lower[0] if latin_lower else ''
+
+                    expected_first = cyrillic_to_latin_first.get(first_cyrillic, first_cyrillic)
+                    if expected_first == first_latin:
+                        # Likely match - replace Latin with Cyrillic
+                        old_like = match.group(0)
+                        new_like = old_like.replace(latin_value, cyrillic_name)
+                        sql = sql.replace(old_like, new_like)
+                        logger.debug(f"Restored Cyrillic name: '{latin_value}' -> '{cyrillic_name}'")
+                        break
+
+        # Ensure Cyrillic strings have N prefix and proper wildcards
+        sql = self._fix_cyrillic_string_format(sql)
+        return sql
+
+    def _fix_cyrillic_string_format(self, sql: str) -> str:
+        """Ensure Cyrillic strings have N prefix and proper wildcards for name searches."""
+        # Pattern to find strings with Cyrillic (with or without N prefix)
+        # Match LIKE N'value' or LIKE 'value' patterns - catches any string with Cyrillic chars
+        pattern = r"LIKE\s+N?'(%?)([^']*[А-Яа-яІЇЄҐіїєґ][^']*)(%?)'"
+        
+        def add_n_prefix_and_wildcards(match):
+            prefix_wild = match.group(1)
+            value = match.group(2)
+            suffix_wild = match.group(3)
+            # Ensure wildcards on both sides for name searches
+            if not prefix_wild:
+                prefix_wild = '%'
+            if not suffix_wild:
+                suffix_wild = '%'
+            return f"LIKE N'{prefix_wild}{value}{suffix_wild}'"
+        
+        sql = re.sub(pattern, add_n_prefix_and_wildcards, sql, flags=re.IGNORECASE)
+        
+        # Also fix strings with high-byte characters (partially transliterated names)
+        # Pattern for any non-ASCII in LIKE clause
+        pattern2 = r"LIKE\s+'(%?)([^']*[-ÿ][^']*)(%?)'"
+        sql = re.sub(pattern2, add_n_prefix_and_wildcards, sql, flags=re.IGNORECASE)
+        
         return sql
 
     def _fix_region_column(self, sql: str) -> str:
@@ -877,11 +1261,13 @@ Generate ONLY the SQL query, no explanation:
         Pattern: c.Region LIKE N'XM%' (or = 'XM')
         Fix to: c.RegionID IN (SELECT ID FROM dbo.Region WHERE Name LIKE N'XM%')
         """
+        # First convert any Cyrillic region codes to Latin
+        sql = self._fix_cyrillic_region_codes(sql)
         original = sql
 
         # Pattern: alias.Region LIKE N'value%'
         sql = re.sub(
-            r'(\w+)\.Region\s+LIKE\s+(N\'[^\']+\')',
+            r'(\w+)\.Region\s+LIKE\s+(N?\'[^\']+\')',
             r'\1.RegionID IN (SELECT ID FROM dbo.Region WHERE Name LIKE \2)',
             sql,
             flags=re.IGNORECASE
@@ -891,6 +1277,22 @@ Generate ONLY the SQL query, no explanation:
         sql = re.sub(
             r'(\w+)\.Region\s*=\s*(N?\'[^\']+\')',
             r'\1.RegionID IN (SELECT ID FROM dbo.Region WHERE Name = \2)',
+            sql,
+            flags=re.IGNORECASE
+        )
+
+        # Pattern: unqualified Region = 'value' (no alias) - for simple queries like SELECT COUNT(*) FROM Client
+        sql = re.sub(
+            r'\bWHERE\s+Region\s*=\s*(N?\'[^\']+\')',
+            r'WHERE RegionID IN (SELECT ID FROM dbo.Region WHERE Name = \1)',
+            sql,
+            flags=re.IGNORECASE
+        )
+
+        # Pattern: unqualified Region LIKE 'value%' (no alias)
+        sql = re.sub(
+            r'\bWHERE\s+Region\s+LIKE\s+(N?\'[^\']+\')',
+            r'WHERE RegionID IN (SELECT ID FROM dbo.Region WHERE Name LIKE \1)',
             sql,
             flags=re.IGNORECASE
         )
@@ -964,6 +1366,50 @@ Generate ONLY the SQL query, no explanation:
 
         return sql
 
+    def _fix_debt_client_join(self, sql: str) -> str:
+        """Fix incorrect Debt-Client join patterns.
+
+        LLM often hallucinates direct join between Client and Debt using d.ClientID.
+        This fixes it to use the correct path: Client -> ClientInDebt -> Debt
+
+        Patterns fixed:
+        1. JOIN Debt d ON d.ClientID = c.ID  (ClientID doesn't exist on Debt)
+        2. JOIN Debt d ON c.ID = d.ClientID  (reverse order of above)
+        """
+        original = sql
+
+        # Check if Debt table is referenced and has incorrect ClientID join
+        if re.search(r'\bDebt\b', sql, re.IGNORECASE) and re.search(r'\b(?:d|Debt)\.ClientID\b', sql, re.IGNORECASE):
+            # Pattern: FROM Client c ... JOIN Debt d ON d.ClientID = c.ID
+            # or: FROM Client c ... JOIN Debt d ON c.ID = d.ClientID
+            sql = re.sub(
+                r'(FROM\s+(?:dbo\.)?\[?Client\]?\s+(\w+))\s+'
+                r'(?:LEFT\s+|RIGHT\s+|INNER\s+)?JOIN\s+(?:dbo\.)?\[?Debt\]?\s+(\w+)\s+'
+                r'ON\s+(?:\w+\.ClientID\s*=\s*\w+\.ID|\w+\.ID\s*=\s*\w+\.ClientID)',
+                r'\1 '
+                r'JOIN dbo.ClientInDebt cid ON cid.ClientID = \2.ID '
+                r'JOIN dbo.Debt \3 ON cid.DebtID = \3.ID',
+                sql,
+                flags=re.IGNORECASE
+            )
+
+            # Also add cid.Deleted = 0 condition if there's a WHERE clause with Deleted
+            if sql != original and 'WHERE' in sql.upper():
+                # Add cid.Deleted = 0 to WHERE conditions if not already present
+                if not re.search(r'\bcid\.Deleted\b', sql, re.IGNORECASE):
+                    sql = re.sub(
+                        r'\bWHERE\s+',
+                        r'WHERE cid.Deleted = 0 AND ',
+                        sql,
+                        count=1,
+                        flags=re.IGNORECASE
+                    )
+
+        if sql != original:
+            logger.info(f"Debt.ClientID fix applied: {sql[:200]}...")
+
+        return sql
+
     # Common schema hallucinations to detect and reject (triggers retry)
     SCHEMA_ERRORS = [
         # Removed Order.ClientID - now fixed in _fix_order_client_join
@@ -982,9 +1428,86 @@ Generate ONLY the SQL query, no explanation:
         for pattern, error_msg in self.SCHEMA_ERRORS:
             if re.search(pattern, sql_query, re.IGNORECASE):
                 raise ValueError(f"Schema error: {error_msg}")
+        # Validate columns and joins against schema/rulebook
+        errors, warnings = self._validate_joins_against_schema(sql_query)
+        if warnings:
+            logger.info(f"Join validation warnings: {warnings[:3]}{' ...' if len(warnings)>3 else ''}")
+        if errors:
+            raise ValueError(" ; ".join(errors))
         text(sql_query)
 
     def _check_read_only(self, sql_query: str) -> None:
         for kw in ["INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER"]:
             if re.search(rf"\b{kw}\b", sql_query.upper()):
                 raise ValueError(f"Write operation not allowed: {kw}")
+
+    def _validate_joins_against_schema(self, sql_query: str) -> tuple[list, list]:
+        """Lightweight validation of aliases/columns and join pairs against schema.
+
+        Returns:
+            (errors, warnings)
+        """
+        errors = []
+        warnings = []
+        if not self._table_columns:
+            return errors, warnings
+
+        # Detect common CTE names so we do not flag them as missing tables
+        cte_names = set()
+        for match in re.finditer(r'\bWITH\s+([A-Za-z_]\w*)\s+AS\b', sql_query, re.IGNORECASE):
+            cte_names.add(match.group(1))
+        for match in re.finditer(r'\b,\s*([A-Za-z_]\w*)\s+AS\b', sql_query, re.IGNORECASE):
+            cte_names.add(match.group(1))
+
+        # Build alias -> table map
+        alias_pattern = re.compile(r'\b(?:FROM|JOIN)\s+(?:dbo\.)?\[?(\w+)\]?\s+(?:AS\s+)?(\w+)?', re.IGNORECASE)
+        aliases = {}
+        for match in alias_pattern.finditer(sql_query):
+            table = normalize_table_name(match.group(1))
+            alias = match.group(2) or table
+            aliases[alias] = table
+
+        if not aliases:
+            return errors, warnings
+
+        # Validate table existence (skip CTEs)
+        for alias, table in aliases.items():
+            if table not in self._table_columns and table not in cte_names:
+                errors.append(f"Unknown table {table}")
+
+        # Find column references alias.col
+        col_ref_pattern = re.compile(r'\b([A-Za-z_]\w*)\.\[?([A-Za-z_]\w*)\]?\b')
+        for a, col in col_ref_pattern.findall(sql_query):
+            if a not in aliases:
+                continue
+            table = aliases[a]
+            col_clean = col.replace("[", "").replace("]", "")
+            if table in self._table_columns and col_clean not in self._table_columns[table]:
+                errors.append(f"Column {a}.{col_clean} not found in table {table}")
+
+        # Validate join pairs
+        join_eq_pattern = re.compile(r'([A-Za-z_]\w*)\.\[?([A-Za-z_]\w*)\]?\s*=\s*([A-Za-z_]\w*)\.\[?([A-Za-z_]\w*)\]?', re.IGNORECASE)
+        for a1, c1, a2, c2 in join_eq_pattern.findall(sql_query):
+            if a1 not in aliases or a2 not in aliases:
+                continue
+            t1 = aliases[a1]
+            t2 = aliases[a2]
+            c1_clean = c1.replace("[", "").replace("]", "")
+            c2_clean = c2.replace("[", "").replace("]", "")
+            # Column existence (already checked above, but keep to attach context)
+            if t1 in self._table_columns and c1_clean not in self._table_columns[t1]:
+                errors.append(f"Join uses missing column {a1}.{c1_clean} (table {t1})")
+                continue
+            if t2 in self._table_columns and c2_clean not in self._table_columns[t2]:
+                errors.append(f"Join uses missing column {a2}.{c2_clean} (table {t2})")
+                continue
+            # FK consistency check (escalate only for known bad direct joins)
+            if (t1, c1_clean, t2, c2_clean) not in self._fk_pairs:
+                message = f"Join {a1}.{c1_clean} = {a2}.{c2_clean} not in FK map ({t1}<->{t2})"
+                pair_key = frozenset({t1.lower(), t2.lower()})
+                if pair_key in self.FORBIDDEN_DIRECT_JOIN_PAIRS:
+                    errors.append(f"{message} (direct join forbidden)")
+                else:
+                    warnings.append(message)
+
+        return errors, warnings

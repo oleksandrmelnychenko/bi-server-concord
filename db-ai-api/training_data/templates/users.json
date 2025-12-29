@@ -1,0 +1,375 @@
+{
+  "domain": "users",
+  "description": "User, manager and employee query examples",
+  "tables": [
+    "User",
+    "UserRole",
+    "Client"
+  ],
+  "examples": [
+    {
+      "id": "user_count_001",
+      "category": "aggregation",
+      "complexity": "simple",
+      "question_en": "How many users in the system",
+      "question_uk": "Скільки користувачів в системі",
+      "variations_en": [
+        "total users",
+        "user count",
+        "number of users"
+      ],
+      "variations_uk": [
+        "кількість користувачів",
+        "всього користувачів",
+        "скільки юзерів"
+      ],
+      "sql": "SELECT COUNT(*) as UserCount FROM dbo.[User] WHERE Deleted = 0",
+      "tables_used": ["User"]
+    },
+    {
+      "id": "user_active_002",
+      "category": "aggregation",
+      "complexity": "simple",
+      "question_en": "How many active users",
+      "question_uk": "Скільки активних користувачів",
+      "variations_en": [
+        "active user count",
+        "count of active users"
+      ],
+      "variations_uk": [
+        "кількість активних користувачів",
+        "активні юзери"
+      ],
+      "sql": "SELECT COUNT(*) as ActiveUserCount FROM dbo.[User] WHERE Deleted = 0 AND IsActive = 1",
+      "tables_used": ["User"]
+    },
+    {
+      "id": "manager_count_003",
+      "category": "aggregation",
+      "complexity": "simple",
+      "question_en": "How many managers work in the system",
+      "question_uk": "Скільки менеджерів працює в системі",
+      "variations_en": [
+        "manager count",
+        "total managers",
+        "number of managers"
+      ],
+      "variations_uk": [
+        "кількість менеджерів",
+        "скільки менеджерів",
+        "всього менеджерів"
+      ],
+      "sql": "SELECT COUNT(*) as ManagerCount FROM dbo.[User] u JOIN dbo.UserRole ur ON u.UserRoleID = ur.ID WHERE u.Deleted = 0 AND u.IsActive = 1 AND ur.Deleted = 0 AND (ur.Name LIKE N'%Analytic%' OR ur.Name LIKE N'%Manager%')",
+      "tables_used": ["User", "UserRole"],
+      "notes": "Roles in system: SalesAnalytic, PurchaseAnalytic, HeadSalesAnalytic, WarehouseManager, Administrator, Accountant, FinanceDirector"
+    },
+    {
+      "id": "user_list_004",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "List all users",
+      "question_uk": "Список всіх користувачів",
+      "variations_en": [
+        "show all users",
+        "all employees",
+        "user directory"
+      ],
+      "variations_uk": [
+        "покажи всіх користувачів",
+        "всі користувачі",
+        "перелік користувачів"
+      ],
+      "sql": "SELECT u.ID, u.FirstName, u.LastName, u.Email, u.PhoneNumber, ur.Name as Role FROM dbo.[User] u LEFT JOIN dbo.UserRole ur ON u.UserRoleID = ur.ID WHERE u.Deleted = 0 ORDER BY u.LastName, u.FirstName",
+      "tables_used": ["User", "UserRole"]
+    },
+    {
+      "id": "manager_list_005",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "List all managers",
+      "question_uk": "Список всіх менеджерів",
+      "variations_en": [
+        "show managers",
+        "all managers",
+        "manager directory"
+      ],
+      "variations_uk": [
+        "покажи менеджерів",
+        "всі менеджери",
+        "перелік менеджерів"
+      ],
+      "sql": "SELECT u.ID, u.FirstName, u.LastName, u.Email, u.PhoneNumber, ur.Name as Role FROM dbo.[User] u JOIN dbo.UserRole ur ON u.UserRoleID = ur.ID WHERE u.Deleted = 0 AND u.IsActive = 1 AND ur.Deleted = 0 AND (ur.Name LIKE N'%Analytic%' OR ur.Name LIKE N'%Manager%') ORDER BY u.LastName, u.FirstName",
+      "tables_used": ["User", "UserRole"],
+      "notes": "Manager roles: SalesAnalytic, PurchaseAnalytic, HeadSalesAnalytic, WarehouseManager"
+    },
+    {
+      "id": "user_roles_006",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "What roles exist in the system",
+      "question_uk": "Які ролі є в системі",
+      "variations_en": [
+        "list roles",
+        "all roles",
+        "user role types"
+      ],
+      "variations_uk": [
+        "список ролей",
+        "всі ролі",
+        "типи ролей"
+      ],
+      "sql": "SELECT ID, Name, UserRoleType FROM dbo.UserRole WHERE Deleted = 0 ORDER BY Name",
+      "tables_used": ["UserRole"]
+    },
+    {
+      "id": "user_by_role_007",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "Users count by role",
+      "question_uk": "Кількість користувачів по ролях",
+      "variations_en": [
+        "how many users per role",
+        "user distribution by role"
+      ],
+      "variations_uk": [
+        "скільки користувачів в кожній ролі",
+        "розподіл користувачів по ролях"
+      ],
+      "sql": "SELECT ur.Name as Role, COUNT(u.ID) as UserCount FROM dbo.[User] u JOIN dbo.UserRole ur ON u.UserRoleID = ur.ID WHERE u.Deleted = 0 AND ur.Deleted = 0 GROUP BY ur.Name ORDER BY UserCount DESC",
+      "tables_used": ["User", "UserRole"]
+    },
+    {
+      "id": "manager_clients_008",
+      "category": "aggregation",
+      "complexity": "medium",
+      "question_en": "How many clients each manager has",
+      "question_uk": "Скільки клієнтів у кожного менеджера",
+      "variations_en": [
+        "clients per manager",
+        "manager client count",
+        "client distribution by manager"
+      ],
+      "variations_uk": [
+        "клієнти по менеджерах",
+        "кількість клієнтів на менеджера",
+        "розподіл клієнтів по менеджерах"
+      ],
+      "sql": "SELECT u.ID, u.FirstName, u.LastName, COUNT(c.ID) as ClientCount FROM dbo.[User] u LEFT JOIN dbo.Client c ON c.MainManagerID = u.ID AND c.Deleted = 0 WHERE u.Deleted = 0 AND u.IsActive = 1 GROUP BY u.ID, u.FirstName, u.LastName ORDER BY ClientCount DESC",
+      "tables_used": ["User", "Client"]
+    },
+    {
+      "id": "top_managers_clients_009",
+      "category": "ranking",
+      "complexity": "medium",
+      "question_en": "Top 10 managers by client count",
+      "question_uk": "Топ 10 менеджерів по кількості клієнтів",
+      "variations_en": [
+        "best managers by clients",
+        "managers with most clients",
+        "top users by assigned clients",
+        "employees with most clients"
+      ],
+      "variations_uk": [
+        "найкращі менеджери за клієнтами",
+        "менеджери з найбільшою кількістю клієнтів",
+        "топ менеджерів по клієнтах",
+        "у кого з менеджерів найбільше клієнтів",
+        "скільки клієнтів закріплено за менеджерами",
+        "рейтинг менеджерів по клієнтах"
+      ],
+      "sql": "SELECT TOP 10 u.ID, u.FirstName, u.LastName, COUNT(c.ID) as ClientCount FROM dbo.[User] u LEFT JOIN dbo.Client c ON c.MainManagerID = u.ID AND c.Deleted = 0 WHERE u.Deleted = 0 AND u.IsActive = 1 GROUP BY u.ID, u.FirstName, u.LastName ORDER BY ClientCount DESC",
+      "tables_used": ["User", "Client"],
+      "notes": "IMPORTANT: Manager = User table, NOT Client. Client.MainManagerID references User.ID. Query User table joined with Client via MainManagerID."
+    },
+    {
+      "id": "manager_sales_010",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Manager sales performance",
+      "question_uk": "Продажі по менеджерах",
+      "variations_en": [
+        "sales by manager",
+        "manager revenue",
+        "how much each manager sold"
+      ],
+      "variations_uk": [
+        "скільки продав кожен менеджер",
+        "виручка по менеджерах",
+        "обсяг продажів менеджерів"
+      ],
+      "sql": "SELECT u.ID, u.FirstName, u.LastName, COUNT(DISTINCT o.ID) as OrderCount, SUM(oi.Qty * oi.PricePerItem) as TotalSales FROM dbo.[User] u JOIN dbo.Client c ON c.MainManagerID = u.ID JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID WHERE u.Deleted = 0 AND c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 GROUP BY u.ID, u.FirstName, u.LastName ORDER BY TotalSales DESC",
+      "tables_used": ["User", "Client", "ClientAgreement", "Order", "OrderItem"]
+    },
+    {
+      "id": "top_managers_sales_011",
+      "category": "ranking",
+      "complexity": "complex",
+      "question_en": "Top 10 managers by sales amount",
+      "question_uk": "Топ 10 менеджерів по сумі продажів",
+      "variations_en": [
+        "best selling managers",
+        "managers with highest sales"
+      ],
+      "variations_uk": [
+        "найкращі менеджери за продажами",
+        "менеджери з найбільшими продажами"
+      ],
+      "sql": "SELECT TOP 10 u.ID, u.FirstName, u.LastName, SUM(oi.Qty * oi.PricePerItem) as TotalSales FROM dbo.[User] u JOIN dbo.Client c ON c.MainManagerID = u.ID JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID JOIN dbo.OrderItem oi ON oi.OrderID = o.ID WHERE u.Deleted = 0 AND c.Deleted = 0 AND o.Deleted = 0 AND oi.Deleted = 0 GROUP BY u.ID, u.FirstName, u.LastName ORDER BY TotalSales DESC",
+      "tables_used": ["User", "Client", "ClientAgreement", "Order", "OrderItem"]
+    },
+    {
+      "id": "user_search_012",
+      "category": "search",
+      "complexity": "simple",
+      "question_en": "Find user by name",
+      "question_uk": "Знайти користувача по імені",
+      "variations_en": [
+        "search user",
+        "lookup employee"
+      ],
+      "variations_uk": [
+        "пошук користувача",
+        "знайти працівника"
+      ],
+      "sql": "SELECT u.ID, u.FirstName, u.LastName, u.Email, u.PhoneNumber, ur.Name as Role FROM dbo.[User] u LEFT JOIN dbo.UserRole ur ON u.UserRoleID = ur.ID WHERE u.Deleted = 0 AND (u.FirstName LIKE N'%keyword%' OR u.LastName LIKE N'%keyword%')",
+      "tables_used": ["User", "UserRole"]
+    },
+    {
+      "id": "manager_by_region_013",
+      "category": "filter",
+      "complexity": "medium",
+      "question_en": "Managers by region",
+      "question_uk": "Менеджери по регіонах",
+      "variations_en": [
+        "managers in each region",
+        "regional managers"
+      ],
+      "variations_uk": [
+        "менеджери в кожному регіоні",
+        "регіональні менеджери"
+      ],
+      "sql": "SELECT u.Region, COUNT(*) as ManagerCount FROM dbo.[User] u JOIN dbo.UserRole ur ON u.UserRoleID = ur.ID WHERE u.Deleted = 0 AND u.IsActive = 1 AND (ur.Name LIKE N'%Analytic%' OR ur.Name LIKE N'%Manager%') AND u.Region IS NOT NULL GROUP BY u.Region ORDER BY ManagerCount DESC",
+      "tables_used": ["User", "UserRole"],
+      "notes": "Manager roles: SalesAnalytic, PurchaseAnalytic, HeadSalesAnalytic, WarehouseManager"
+    },
+    {
+      "id": "client_manager_014",
+      "category": "search",
+      "complexity": "medium",
+      "question_en": "Who is the manager for a specific client",
+      "question_uk": "Хто менеджер клієнта",
+      "variations_en": [
+        "client manager",
+        "find client's manager"
+      ],
+      "variations_uk": [
+        "менеджер клієнта",
+        "хто обслуговує клієнта"
+      ],
+      "sql": "SELECT c.Name as ClientName, u.FirstName, u.LastName, u.Email, u.PhoneNumber FROM dbo.Client c LEFT JOIN dbo.[User] u ON c.MainManagerID = u.ID WHERE c.Deleted = 0 AND c.Name LIKE N'%keyword%'",
+      "tables_used": ["Client", "User"]
+    },
+    {
+      "id": "manager_new_clients_015",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "How many new clients did each manager bring this year",
+      "question_uk": "Скільки нових клієнтів привів кожен менеджер цього року",
+      "variations_en": [
+        "new clients per manager",
+        "manager acquisitions"
+      ],
+      "variations_uk": [
+        "нові клієнти по менеджерах",
+        "залучення клієнтів менеджерами"
+      ],
+      "sql": "SELECT u.ID, u.FirstName, u.LastName, COUNT(c.ID) as NewClients FROM dbo.[User] u LEFT JOIN dbo.Client c ON c.MainManagerID = u.ID AND c.Deleted = 0 AND YEAR(c.Created) = YEAR(GETDATE()) WHERE u.Deleted = 0 AND u.IsActive = 1 GROUP BY u.ID, u.FirstName, u.LastName HAVING COUNT(c.ID) > 0 ORDER BY NewClients DESC",
+      "tables_used": ["User", "Client"]
+    },
+    {
+      "id": "clients_no_manager_016",
+      "category": "filter",
+      "complexity": "simple",
+      "question_en": "Clients without assigned manager",
+      "question_uk": "Клієнти без менеджера",
+      "variations_en": [
+        "unassigned clients",
+        "clients with no manager"
+      ],
+      "variations_uk": [
+        "клієнти без призначеного менеджера",
+        "незакріплені клієнти"
+      ],
+      "sql": "SELECT TOP 50 ID, Name, Phone, Email FROM dbo.Client WHERE Deleted = 0 AND (MainManagerID IS NULL OR MainManagerID NOT IN (SELECT ID FROM dbo.[User] WHERE Deleted = 0 AND IsActive = 1)) ORDER BY Created DESC",
+      "tables_used": ["Client", "User"]
+    },
+    {
+      "id": "manager_orders_month_017",
+      "category": "aggregation",
+      "complexity": "complex",
+      "question_en": "Manager orders count this month",
+      "question_uk": "Кількість замовлень менеджерів за цей місяць",
+      "variations_en": [
+        "monthly orders by manager",
+        "manager order count this month"
+      ],
+      "variations_uk": [
+        "замовлення менеджерів за місяць",
+        "скільки замовлень у менеджерів цього місяця"
+      ],
+      "sql": "SELECT u.FirstName, u.LastName, COUNT(o.ID) as OrderCount FROM dbo.[User] u JOIN dbo.Client c ON c.MainManagerID = u.ID JOIN dbo.ClientAgreement ca ON ca.ClientID = c.ID JOIN dbo.[Order] o ON o.ClientAgreementID = ca.ID WHERE u.Deleted = 0 AND c.Deleted = 0 AND o.Deleted = 0 AND MONTH(o.Created) = MONTH(GETDATE()) AND YEAR(o.Created) = YEAR(GETDATE()) GROUP BY u.ID, u.FirstName, u.LastName ORDER BY OrderCount DESC",
+      "tables_used": ["User", "Client", "ClientAgreement", "Order"]
+    },
+    {
+      "id": "user_role_count_018",
+      "category": "aggregation",
+      "complexity": "simple",
+      "question_en": "How many roles exist",
+      "question_uk": "Скільки ролей в системі",
+      "variations_en": [
+        "role count",
+        "total roles"
+      ],
+      "variations_uk": [
+        "кількість ролей",
+        "всього ролей"
+      ],
+      "sql": "SELECT COUNT(*) as RoleCount FROM dbo.UserRole WHERE Deleted = 0",
+      "tables_used": ["UserRole"]
+    },
+    {
+      "id": "user_email_list_019",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "User email list",
+      "question_uk": "Список email користувачів",
+      "variations_en": [
+        "all user emails",
+        "employee email directory"
+      ],
+      "variations_uk": [
+        "email всіх користувачів",
+        "пошта співробітників"
+      ],
+      "sql": "SELECT FirstName, LastName, Email FROM dbo.[User] WHERE Deleted = 0 AND IsActive = 1 AND Email IS NOT NULL AND Email != '' ORDER BY LastName, FirstName",
+      "tables_used": ["User"]
+    },
+    {
+      "id": "user_phone_list_020",
+      "category": "listing",
+      "complexity": "simple",
+      "question_en": "User phone list",
+      "question_uk": "Список телефонів користувачів",
+      "variations_en": [
+        "all user phones",
+        "employee phone directory"
+      ],
+      "variations_uk": [
+        "телефони всіх користувачів",
+        "телефони співробітників"
+      ],
+      "sql": "SELECT FirstName, LastName, PhoneNumber FROM dbo.[User] WHERE Deleted = 0 AND IsActive = 1 AND PhoneNumber IS NOT NULL AND PhoneNumber != '' ORDER BY LastName, FirstName",
+      "tables_used": ["User"]
+    }
+  ]
+}

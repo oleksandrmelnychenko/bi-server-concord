@@ -150,6 +150,7 @@ class QueryExampleEmbedder:
             "question_uk": example.get("question_uk", ""),
             "sql": example.get("sql", ""),
             "tables_used": ",".join(example.get("tables_used", [])),
+            "notes": example.get("notes", ""),  # Include notes for domain-specific hints
             "source_file": filepath,
             "embedded_at": datetime.now().isoformat(),
         }
