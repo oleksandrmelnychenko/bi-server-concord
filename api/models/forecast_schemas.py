@@ -81,9 +81,40 @@ class ModelMetadata(BaseModel):
         description="Statistical methods used"
     )
 
+class ProductSalesHistory(BaseModel):
+    month: str = Field(..., description="Month in YYYY-MM format")
+    orders: int = Field(..., description="Number of orders")
+    qty: float = Field(..., description="Total quantity sold")
+    amount: float = Field(..., description="Total revenue")
+
+class ProductTopCustomer(BaseModel):
+    customer_id: int = Field(..., description="Customer ID")
+    customer_name: str = Field(..., description="Customer name")
+    total_qty: float = Field(..., description="Total quantity purchased")
+    order_count: int = Field(..., description="Number of orders")
+    total_amount: float = Field(..., description="Total amount spent")
+
+class ProductCharts(BaseModel):
+    sales_history: List[ProductSalesHistory] = Field(default_factory=list, description="Monthly sales history")
+    top_customers: List[ProductTopCustomer] = Field(default_factory=list, description="Top customers")
+    monthly_trend: List[Dict[str, Any]] = Field(default_factory=list, description="Monthly trend data")
+
+class ProductProof(BaseModel):
+    total_orders: int = Field(0, description="Total orders all time")
+    total_qty_sold: float = Field(0, description="Total quantity sold")
+    total_revenue: float = Field(0, description="Total revenue")
+    unique_customers: int = Field(0, description="Unique customers")
+    avg_order_qty: float = Field(0, description="Average order quantity")
+    last_sale_date: Optional[str] = Field(None, description="Last sale date")
+    days_since_last_sale: Optional[int] = Field(None, description="Days since last sale")
+    first_sale_date: Optional[str] = Field(None, description="First sale date")
+    product_age_days: Optional[int] = Field(None, description="Product age in days")
+
 class ProductForecastResponse(BaseModel):
     product_id: int = Field(..., description="Product ID")
     product_name: Optional[str] = Field(None, description="Product name")
+    vendor_code: Optional[str] = Field(None, description="Product vendor code")
+    category: Optional[str] = Field(None, description="Product category")
     forecast_period_weeks: int = Field(..., description="Number of weeks forecasted")
     historical_weeks: int = Field(..., description="Number of historical weeks included")
 
@@ -98,6 +129,8 @@ class ProductForecastResponse(BaseModel):
         description="Customers at risk of churn"
     )
     model_metadata: ModelMetadata = Field(..., description="Model metadata and statistics")
+    charts: Optional[ProductCharts] = Field(None, description="Product sales charts data")
+    proof: Optional[ProductProof] = Field(None, description="Product proof/evidence metrics")
 
     class Config:
         json_schema_extra = {

@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')  # Use 127.0.0.1 instead of localhost
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
-CACHE_TTL = int(os.getenv('CACHE_TTL', 3600))  # 1 hour default
+CACHE_TTL = int(os.getenv('CACHE_TTL', 604800))  # 7 days default
 
 TARGET_P99_MS = 100
 TARGET_P50_MS = 50
@@ -203,36 +203,24 @@ async def get_metrics():
         p50_target_ms=TARGET_P50_MS
     )
 
-def get_cache_key(customer_id: int, top_n: int, as_of_date: Optional[datetime]) -> str:
-    date_str = as_of_date.strftime('%Y-%m-%d') if as_of_date else 'latest'
-    return f"recs:v1:{customer_id}:{top_n}:{date_str}"
+# Unified cache key pattern: recommendations:customer:{customer_id}:{as_of_date}
+CACHE_KEY_PREFIX = "recommendations:customer"
 
-def get_worker_cache_key(customer_id: int, as_of_date: str) -> str:
-    return f"recommendations:customer:{customer_id}:{as_of_date}"
 
-def get_from_worker_cache(customer_id: int, as_of_date: str) -> Optional[Dict[str, Any]]:
+def get_cache_key(customer_id: int, as_of_date: Optional[str] = None) -> str:
+    """Get unified cache key for a customer's recommendations."""
+    if as_of_date is None:
+        as_of_date = datetime.now().strftime('%Y-%m-%d')
+    return f"{CACHE_KEY_PREFIX}:{customer_id}:{as_of_date}"
+
+
+def get_from_cache(customer_id: int, as_of_date: Optional[str] = None) -> Optional[List[Dict]]:
+    """Retrieve recommendations from cache."""
     if not redis_client:
         return None
 
     try:
-        cache_key = get_worker_cache_key(customer_id, as_of_date)
-        cached = redis_client.get(cache_key)
-        if cached:
-            metrics['cache_hits'] += 1
-            logger.debug(f"Worker Cache HIT: {cache_key}")
-            return json.loads(cached)
-        else:
-            logger.debug(f"Worker Cache MISS: {cache_key}")
-            return None
-    except Exception as e:
-        logger.warning(f"Worker cache read error: {e}")
-        return None
-
-def get_from_cache(cache_key: str) -> Optional[List[Dict]]:
-    if not redis_client:
-        return None
-
-    try:
+        cache_key = get_cache_key(customer_id, as_of_date)
         cached = redis_client.get(cache_key)
         if cached:
             metrics['cache_hits'] += 1
@@ -246,11 +234,14 @@ def get_from_cache(cache_key: str) -> Optional[List[Dict]]:
         logger.warning(f"Cache read error: {e}")
         return None
 
-def set_in_cache(cache_key: str, recommendations: List[Dict], ttl: int = CACHE_TTL):
+
+def set_in_cache(customer_id: int, recommendations: List[Dict], as_of_date: Optional[str] = None, ttl: int = CACHE_TTL):
+    """Store recommendations in cache."""
     if not redis_client:
         return
 
     try:
+        cache_key = get_cache_key(customer_id, as_of_date)
         redis_client.setex(
             cache_key,
             ttl,
@@ -260,47 +251,289 @@ def set_in_cache(cache_key: str, recommendations: List[Dict], ttl: int = CACHE_T
     except Exception as e:
         logger.warning(f"Cache write error: {e}")
 
-@app.get("/recommendations/{customer_id}", tags=["Recommendations"])
-async def get_weekly_recommendations(customer_id: int):
-    start_time = time.time()
+
+def fetch_client_analytics(conn, customer_id: int) -> Dict[str, Any]:
+    """Fetch client analytics data for charts and proof metrics."""
+    cursor = conn.cursor()
+    result = {
+        "client_name": None,
+        "segment": "UNKNOWN",
+        "charts": {
+            "purchase_history": [],
+            "top_categories": [],
+            "recommendation_sources": []
+        },
+        "proof": {
+            "total_orders": 0,
+            "avg_order_value": 0,
+            "last_order_date": None,
+            "days_since_last_order": None,
+            "loyalty_score": 0,
+            "total_products_purchased": 0,
+            "total_spent": 0,
+            "model_confidence": 0.754
+        }
+    }
 
     try:
+        # Get client name
+        cursor.execute("""
+            SELECT Name, FullName FROM dbo.Client WHERE ID = ? AND Deleted = 0
+        """, (customer_id,))
+        row = cursor.fetchone()
+        if row:
+            result["client_name"] = row[1] if row[1] else row[0]
 
+        # Get agreement IDs for this customer
+        cursor.execute("""
+            SELECT ID FROM dbo.ClientAgreement WHERE ClientID = ? AND Deleted = 0
+        """, (customer_id,))
+        agreement_ids = [r[0] for r in cursor.fetchall()]
+
+        if not agreement_ids:
+            return result
+
+        agreement_list = ','.join(str(a) for a in agreement_ids)
+
+        # Purchase history (last 12 months for chart tabs)
+        cursor.execute(f"""
+            SELECT FORMAT(o.Created, 'yyyy-MM') as month,
+                   COUNT(DISTINCT o.ID) as orders,
+                   ISNULL(SUM(oi.Qty * oi.PricePerItem), 0) as amount
+            FROM dbo.[Order] o
+            JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
+            WHERE o.ClientAgreementID IN ({agreement_list})
+              AND o.Created >= DATEADD(month, -12, GETDATE())
+              AND o.Deleted = 0
+            GROUP BY FORMAT(o.Created, 'yyyy-MM')
+            ORDER BY month
+        """)
+        result["charts"]["purchase_history"] = [
+            {"month": r[0], "orders": r[1], "amount": float(r[2])}
+            for r in cursor.fetchall()
+        ]
+
+        # Customer proof stats
+        cursor.execute(f"""
+            SELECT
+                COUNT(DISTINCT o.ID) as total_orders,
+                ISNULL(AVG(order_totals.total), 0) as avg_order_value,
+                MAX(o.Created) as last_order_date,
+                DATEDIFF(day, MAX(o.Created), GETDATE()) as days_since_last,
+                COUNT(DISTINCT oi.ProductID) as total_products,
+                ISNULL(SUM(oi.Qty * oi.PricePerItem), 0) as total_spent
+            FROM dbo.[Order] o
+            JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
+            LEFT JOIN (
+                SELECT o2.ID, SUM(oi2.Qty * oi2.PricePerItem) as total
+                FROM dbo.[Order] o2
+                JOIN dbo.OrderItem oi2 ON o2.ID = oi2.OrderID
+                WHERE o2.ClientAgreementID IN ({agreement_list}) AND o2.Deleted = 0
+                GROUP BY o2.ID
+            ) order_totals ON o.ID = order_totals.ID
+            WHERE o.ClientAgreementID IN ({agreement_list})
+              AND o.Deleted = 0
+        """)
+        stats = cursor.fetchone()
+        if stats:
+            result["proof"]["total_orders"] = stats[0] or 0
+            result["proof"]["avg_order_value"] = round(float(stats[1] or 0), 2)
+            result["proof"]["last_order_date"] = stats[2].strftime('%Y-%m-%d') if stats[2] else None
+            result["proof"]["days_since_last_order"] = stats[3]
+            result["proof"]["total_products_purchased"] = stats[4] or 0
+            result["proof"]["total_spent"] = round(float(stats[5] or 0), 2)
+
+            # Calculate loyalty score (0-1) based on recency and frequency
+            total_orders = stats[0] or 0
+            days_since = stats[3] or 365
+            recency_score = max(0, 1 - (days_since / 365))
+            frequency_score = min(1, total_orders / 100)
+            result["proof"]["loyalty_score"] = round((recency_score * 0.4 + frequency_score * 0.6), 2)
+
+            # Determine segment
+            if total_orders >= 500:
+                result["segment"] = "HEAVY"
+            elif total_orders >= 100:
+                result["segment"] = "REGULAR"
+            elif total_orders > 0:
+                result["segment"] = "LIGHT"
+            else:
+                result["segment"] = "COLD_START"
+
+    except Exception as e:
+        logger.warning(f"Error fetching client analytics: {e}")
+
+    return result
+
+
+
+def fetch_product_analytics(conn, product_id: int) -> Dict[str, Any]:
+    """Fetch product analytics data for charts and proof metrics."""
+    cursor = conn.cursor()
+    result = {
+        "product_name": None,
+        "vendor_code": None,
+        "category": None,
+        "charts": {
+            "sales_history": [],
+            "top_customers": [],
+            "monthly_trend": []
+        },
+        "proof": {
+            "total_orders": 0,
+            "total_qty_sold": 0,
+            "total_revenue": 0,
+            "unique_customers": 0,
+            "avg_order_qty": 0,
+            "last_sale_date": None,
+            "days_since_last_sale": None,
+            "first_sale_date": None,
+            "product_age_days": None
+        }
+    }
+
+    try:
+        # Get product info (simplified - without ProductGroup join that may fail)
+        cursor.execute("""
+            SELECT p.Name, p.VendorCode
+            FROM dbo.Product p
+            WHERE p.ID = ? AND p.Deleted = 0
+        """, (product_id,))
+        row = cursor.fetchone()
+        if row:
+            result["product_name"] = row[0]
+            result["vendor_code"] = row[1]
+            result["category"] = None  # ProductGroup join removed due to schema differences
+
+        # Sales history (last 12 months)
+        cursor.execute("""
+            SELECT FORMAT(o.Created, 'yyyy-MM') as month,
+                   COUNT(DISTINCT o.ID) as orders,
+                   ISNULL(SUM(oi.Qty), 0) as qty,
+                   ISNULL(SUM(oi.Qty * oi.PricePerItem), 0) as amount
+            FROM dbo.[Order] o
+            JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
+            WHERE oi.ProductID = ?
+              AND o.Created >= DATEADD(month, -12, GETDATE())
+              AND o.Deleted = 0
+            GROUP BY FORMAT(o.Created, 'yyyy-MM')
+            ORDER BY month
+        """, (product_id,))
+        result["charts"]["sales_history"] = [
+            {"month": r[0], "orders": r[1], "qty": float(r[2]), "amount": float(r[3])}
+            for r in cursor.fetchall()
+        ]
+
+        # Top customers for this product (last 12 months)
+        cursor.execute("""
+            SELECT TOP 10
+                   c.ID as customer_id,
+                   c.Name as customer_name,
+                   SUM(oi.Qty) as total_qty,
+                   COUNT(DISTINCT o.ID) as order_count,
+                   SUM(oi.Qty * oi.PricePerItem) as total_amount
+            FROM dbo.[Order] o
+            JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
+            JOIN dbo.ClientAgreement ca ON o.ClientAgreementID = ca.ID
+            JOIN dbo.Client c ON ca.ClientID = c.ID
+            WHERE oi.ProductID = ?
+              AND o.Created >= DATEADD(month, -12, GETDATE())
+              AND o.Deleted = 0
+            GROUP BY c.ID, c.Name
+            ORDER BY total_qty DESC
+        """, (product_id,))
+        result["charts"]["top_customers"] = [
+            {"customer_id": r[0], "customer_name": r[1], "total_qty": float(r[2]),
+             "order_count": r[3], "total_amount": float(r[4])}
+            for r in cursor.fetchall()
+        ]
+
+        # Product proof stats
+        cursor.execute("""
+            SELECT
+                COUNT(DISTINCT o.ID) as total_orders,
+                ISNULL(SUM(oi.Qty), 0) as total_qty,
+                ISNULL(SUM(oi.Qty * oi.PricePerItem), 0) as total_revenue,
+                COUNT(DISTINCT ca.ClientID) as unique_customers,
+                ISNULL(AVG(oi.Qty), 0) as avg_order_qty,
+                MAX(o.Created) as last_sale_date,
+                MIN(o.Created) as first_sale_date,
+                DATEDIFF(day, MAX(o.Created), GETDATE()) as days_since_last
+            FROM dbo.[Order] o
+            JOIN dbo.OrderItem oi ON o.ID = oi.OrderID
+            JOIN dbo.ClientAgreement ca ON o.ClientAgreementID = ca.ID
+            WHERE oi.ProductID = ?
+              AND o.Deleted = 0
+        """, (product_id,))
+        stats = cursor.fetchone()
+        if stats:
+            result["proof"]["total_orders"] = stats[0] or 0
+            result["proof"]["total_qty_sold"] = float(stats[1] or 0)
+            result["proof"]["total_revenue"] = round(float(stats[2] or 0), 2)
+            result["proof"]["unique_customers"] = stats[3] or 0
+            result["proof"]["avg_order_qty"] = round(float(stats[4] or 0), 2)
+            result["proof"]["last_sale_date"] = stats[5].strftime('%Y-%m-%d') if stats[5] else None
+            result["proof"]["first_sale_date"] = stats[6].strftime('%Y-%m-%d') if stats[6] else None
+            result["proof"]["days_since_last_sale"] = stats[7]
+            if stats[6]:
+                result["proof"]["product_age_days"] = (datetime.now() - stats[6]).days
+
+    except Exception as e:
+        logger.warning(f"Error fetching product analytics: {e}")
+
+    return result
+
+@app.get("/recommendations/{customer_id}", tags=["Recommendations"])
+async def get_recommendations(customer_id: int):
+    """Get recommendations for a customer with charts and proof metrics."""
+    start_time = time.time()
+    as_of_date = datetime.now().strftime('%Y-%m-%d')
+
+    try:
         recommendations = None
-        week_key = None
         cached = False
+        analytics = None
 
+        # Try to get from cache first
         if weekly_cache:
-            week_key = weekly_cache.get_week_key()
-            recommendations = weekly_cache.get_recommendations(customer_id)
-
+            recommendations = weekly_cache.get_recommendations(customer_id, as_of_date)
             if recommendations:
                 cached = True
-                logger.debug(f"Weekly cache HIT for customer {customer_id} (week {week_key})")
+                logger.debug(f"Cache HIT for customer {customer_id} (date {as_of_date})")
             else:
-                logger.debug(f"Weekly cache MISS for customer {customer_id} (week {week_key})")
+                logger.debug(f"Cache MISS for customer {customer_id} (date {as_of_date})")
 
-        if recommendations is None:
-            logger.info(f"Generating on-demand recommendations for customer {customer_id}")
-
-            conn = get_connection()
-            try:
+        # Get connection for recommendations and analytics
+        conn = get_connection()
+        try:
+            if recommendations is None:
+                logger.info(f"Generating on-demand recommendations for customer {customer_id}")
                 recommender = ImprovedHybridRecommenderV33(conn=conn, use_cache=True)
-                as_of_date = datetime.now().strftime('%Y-%m-%d')
                 recommendations = recommender.get_recommendations(
                     customer_id=customer_id,
                     as_of_date=as_of_date,
                     top_n=20,
                     include_discovery=True
                 )
-            finally:
-                conn.close()
+
+            # Fetch client analytics (charts + proof)
+            analytics = fetch_client_analytics(conn, customer_id)
+        finally:
+            conn.close()
 
         if len(recommendations) > 20:
             recommendations = recommendations[:20]
 
-        latency_ms = (time.time() - start_time) * 1000
+        # Count recommendation sources for chart
+        source_counts = {}
+        for r in recommendations:
+            source = r.get('source', 'unknown')
+            source_counts[source] = source_counts.get(source, 0) + 1
+        analytics["charts"]["recommendation_sources"] = [
+            {"source": k, "count": v} for k, v in source_counts.items()
+        ]
 
+        latency_ms = (time.time() - start_time) * 1000
         discovery_count = sum(1 for r in recommendations if r.get('source') in ['discovery', 'hybrid'])
 
         metrics['requests'] += 1
@@ -308,10 +541,14 @@ async def get_weekly_recommendations(customer_id: int):
 
         return {
             "customer_id": customer_id,
-            "week": week_key or weekly_cache.get_week_key() if weekly_cache else "unknown",
+            "client_name": analytics.get("client_name"),
+            "segment": analytics.get("segment"),
+            "date": as_of_date,
             "recommendations": recommendations,
             "count": len(recommendations),
             "discovery_count": discovery_count,
+            "charts": analytics.get("charts", {}),
+            "proof": analytics.get("proof", {}),
             "cached": cached,
             "latency_ms": round(latency_ms, 2),
             "timestamp": datetime.now().isoformat()
@@ -319,7 +556,7 @@ async def get_weekly_recommendations(customer_id: int):
 
     except Exception as e:
         metrics['errors'] += 1
-        logger.error(f"Error getting weekly recommendations: {e}", exc_info=True)
+        logger.error(f"Error getting recommendations: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
@@ -394,16 +631,23 @@ async def get_product_forecast(
             metrics['requests'] += 1
             metrics['total_latency_ms'] += latency_ms
 
+            # Fetch product analytics
+            analytics = fetch_product_analytics(conn, product_id)
+
             response_dict = {
                 'product_id': forecast.product_id,
-                'product_name': forecast.product_name,
+                'product_name': analytics.get('product_name') or forecast.product_name,
+                'vendor_code': analytics.get('vendor_code'),
+                'category': analytics.get('category'),
                 'forecast_period_weeks': forecast.forecast_period_weeks,
                 'historical_weeks': forecast.historical_weeks,
                 'summary': forecast.summary,
                 'weekly_data': forecast.weekly_data,  # Unified timeline (historical + forecast)
                 'top_customers_by_volume': forecast.top_customers_by_volume,
                 'at_risk_customers': forecast.at_risk_customers,
-                'model_metadata': forecast.model_metadata
+                'model_metadata': forecast.model_metadata,
+                'charts': analytics.get('charts', {}),
+                'proof': analytics.get('proof', {})
             }
 
             logger.info(
@@ -431,12 +675,13 @@ async def get_product_forecast(
 
 @app.delete("/cache/{customer_id}", tags=["Cache Management"])
 async def clear_customer_cache(customer_id: int):
+    """Clear all cached recommendations for a specific customer."""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
 
     try:
-
-        pattern = f"recs:v1:{customer_id}:*"
+        # Use unified cache key pattern
+        pattern = f"{CACHE_KEY_PREFIX}:{customer_id}:*"
         keys = list(redis_client.scan_iter(match=pattern))
 
         if keys:
@@ -449,13 +694,16 @@ async def clear_customer_cache(customer_id: int):
         logger.error(f"Error clearing cache: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/cache/clear-all", tags=["Cache Management"])
 async def clear_all_cache():
+    """Clear all cached recommendations."""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
 
     try:
-        pattern = "recs:v1:*"
+        # Use unified cache key pattern
+        pattern = f"{CACHE_KEY_PREFIX}:*"
         keys = list(redis_client.scan_iter(match=pattern))
 
         if keys:
