@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Backend
+backend/.env
+backend/logs/
+backend/schema_cache.json
+backend/vector_db/
+backend/faiss_index/
+backend/chroma_db*/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env

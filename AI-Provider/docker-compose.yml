@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # AI-Provider Backend API (port 8000)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai-provider-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Database Configuration (Windows host)
+      - DB_HOST=host.docker.internal
+      - DB_PORT=1433
+      - DB_NAME=ConcordDb_v5
+      - DB_DRIVER=ODBC Driver 18 for SQL Server
+      - DB_TRUSTED_CONNECTION=no
+      - DB_USER=${DB_USER:-sa}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      # Ollama Configuration (host machine)
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=qwen3-coder:30b
+      # API Configuration
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - API_RELOAD=false
+      # Security/Timeout
+      - READ_ONLY_MODE=true
+      - QUERY_TIMEOUT=180
+      - MAX_ROWS_RETURNED=1000
+      # Vector/RAG Configuration
+      - VECTOR_STORE_BACKEND=faiss
+      - FAISS_INDEX_PATH=./faiss_index
+      - EMBEDDING_MODEL=intfloat/multilingual-e5-large
+      - TOP_K_TABLES=10
+      # Query Examples Configuration
+      - QUERY_EXAMPLES_DB=./faiss_examples
+      - QUERY_EXAMPLES_TOP_K=3
+      # Logging
+      - LOG_LEVEL=INFO
+      - LOG_SQL_QUERIES=true
+    volumes:
+      # Persist indexes and cache
+      - ./backend/faiss_index:/app/faiss_index
+      - ./backend/faiss_examples:/app/faiss_examples
+      - ./backend/schema_cache.json:/app/schema_cache.json
+      - ./backend/prompts:/app/prompts
+      - ./backend/training_data:/app/training_data
+      - ./backend/logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # React Frontend (port 3000)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_SQL_API=http://localhost:8000
+        - VITE_ANALYTICS_API=http://localhost:8000
+    container_name: ai-provider-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+networks:
+  default:
+    name: ai-provider-network

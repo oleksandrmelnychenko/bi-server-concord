@@ -1,0 +1,42 @@
+Generate a T-SQL query for the user's question. Output ONLY valid SQL, nothing else.
+
+QUESTION: {question}
+
+IMPORTANT: If the SIMILAR QUERY EXAMPLES section below contains a query that closely matches your question,
+USE THE SQL FROM THAT EXAMPLE AS-IS. Copy the SELECT columns, JOINs, GROUP BY exactly from the example.
+Do not simplify or omit columns that appear in the example SQL.
+
+CRITICAL RULES:
+- SELECT queries ONLY (no UPDATE, DELETE, DROP, INSERT, TRUNCATE)
+- Use TOP N (not LIMIT) for row limits
+- Use [dbo].[TableName] with brackets for reserved words like [Order]
+- Add WHERE alias.Deleted = 0 for soft-delete tables
+- Use N'text' for Ukrainian/Cyrillic string literals
+- Format dates as 'YYYY-MM-DD'
+- Order.ClientID does NOT exist; join Client -> ClientAgreement -> Order (Order.ClientAgreementID)
+- Debt.ClientID does NOT exist; use Client -> ClientInDebt -> Debt
+- Region filter: use RegionID with Region.Name lookup (no Region column on Client)
+- Brands via Product.VendorCode prefixes (e.g., 'SEM%', 'MG%')
+- Stock via ProductAvailability.Amount joined to ProductID/StorageID
+- No Product.Price/CostPrice; use OrderItem.PricePerItem or ProductPricing.Price
+- SUPPLIERS: SupplyOrder.ClientID -> Client table (the Client acts as SUPPLIER). Filter WHERE Client.SupplierName IS NOT NULL to identify suppliers (vs customers)
+- For supplier payments: OutcomePaymentOrder -> SupplyOrganizationAgreement -> SupplyOrganization
+
+KEY SCHEMA RELATIONSHIPS:
+- Order has NO ClientID column! Join path: Order.ClientAgreementID -> ClientAgreement.ClientID -> Client.ID
+- Product.VendorCode contains brand prefix (e.g., 'SEM%' for Semperit, 'MG%' for MG)
+- Client.Name is the display name (not ClientName)
+- Use ProductAvailability.Amount for stock quantities
+
+BRAND FILTERING RULES:
+- ONLY add VendorCode LIKE filters when user EXPLICITLY mentions a brand name (SEM, MG, ALKO, etc.)
+- For general queries like "top products", "best selling products", "топ товарів" - DO NOT add brand filters!
+- Generic "top sales" or "product ranking" queries must return ALL products, not filtered by brand
+
+{intent_hints}
+{join_templates}
+{examples}
+SCHEMA:
+{schema}
+{retry_context}
+SQL:
