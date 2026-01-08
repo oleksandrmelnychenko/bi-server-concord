@@ -580,8 +580,6 @@ class ImprovedHybridRecommenderV33:
         if not product_ids:
             return {}
 
-        cursor = self.conn.cursor()
-
         # Use string interpolation for product IDs (safe - integers only)
         ids_str = ','.join(str(int(pid)) for pid in product_ids)
 
@@ -592,17 +590,12 @@ class ImprovedHybridRecommenderV33:
               AND Deleted = 0
         """
 
-        cursor.execute(query)
-        rows = cursor.fetchall()
-
-        groups = {}
-        for row in rows:
-            if isinstance(row, dict):
+        with self._cursor_context() as cursor:
+            cursor.execute(query)
+            groups = {}
+            for row in cursor:
                 groups[row['ProductID']] = row['ProductGroupID']
-            else:
-                groups[row[0]] = row[1]
 
-        cursor.close()
         logger.debug(f"Found product groups for {len(groups)}/{len(product_ids)} products")
         return groups
 
@@ -717,22 +710,15 @@ class ImprovedHybridRecommenderV33:
         CROSS JOIN TotalOrders t
         """
 
-        cursor = self._dict_cursor()
         params = (
             agreement_id, as_of_date, days_window, as_of_date,  # AgreementProducts
             agreement_id, as_of_date, days_window, as_of_date,  # CoOccurrence
             agreement_id, as_of_date, days_window, as_of_date   # TotalOrders
         )
-        cursor.execute(self._sql(query), params)
 
-        scores = {}
-        for row in cursor:
-            scores[row['ProductID']] = float(row['co_purchase_rate'])
-
-        # Guard against tiny sample sizes to avoid noisy boosts
-        try:
-            cursor_total = self._dict_cursor()
-            cursor_total.execute(
+        # First check sample size to avoid noisy boosts
+        with self._cursor_context() as cursor:
+            cursor.execute(
                 self._sql("""
                 SELECT COUNT(DISTINCT ID) as total_orders
                 FROM dbo.[Order]
@@ -742,17 +728,20 @@ class ImprovedHybridRecommenderV33:
                 """),
                 (agreement_id, as_of_date, days_window, as_of_date)
             )
-            row = cursor_total.fetchone()
+            row = cursor.fetchone()
             total_orders = row['total_orders'] if row else 0
-            cursor_total.close()
-            if total_orders < MIN_CO_PURCHASE_ORDERS:
-                logger.debug(f"Co-purchase suppressed: only {total_orders} orders in window")
-                cursor.close()
-                return {}
-        except Exception as e:
-            logger.warning(f"Co-purchase sample check failed: {e}")
 
-        cursor.close()
+        if total_orders < MIN_CO_PURCHASE_ORDERS:
+            logger.debug(f"Co-purchase suppressed: only {total_orders} orders in window")
+            return {}
+
+        # Now fetch co-purchase scores
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(query), params)
+            scores = {}
+            for row in cursor:
+                scores[row['ProductID']] = float(row['co_purchase_rate'])
+
         logger.debug(f"Co-purchase scores: {len(scores)} products analyzed")
         return scores
 
@@ -816,56 +805,55 @@ class ImprovedHybridRecommenderV33:
         WHERE avg_cycle_days IS NOT NULL
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(self._sql(query), (agreement_id, as_of_date, as_of_date))
-
         scores = {}
         as_of_datetime = datetime.strptime(as_of_date, '%Y-%m-%d')
 
-        for row in cursor:
-            product_id = row['ProductID']
-            avg_cycle = row['avg_cycle_days']
-            variance = row['cycle_variance'] or avg_cycle * 0.2  # Default 20% variance
-            days_since = row['days_since_last']
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(query), (agreement_id, as_of_date, as_of_date))
 
-            # V3.3 BUG FIX: Skip products with very short or zero cycles
-            # A cycle of < MIN_CYCLE_DAYS days doesn't make sense for reorder detection
-            if avg_cycle < MIN_CYCLE_DAYS:
-                scores[product_id] = 0.0
-                continue
+            for row in cursor:
+                product_id = row['ProductID']
+                avg_cycle = row['avg_cycle_days']
+                variance = row['cycle_variance'] or avg_cycle * 0.2  # Default 20% variance
+                days_since = row['days_since_last']
 
-            # Calculate how close we are to the expected reorder date
-            deviation = abs(days_since - avg_cycle)
-            tolerance = max(CYCLE_TOLERANCE_MIN_DAYS, variance * 0.5)
+                # V3.3 BUG FIX: Skip products with very short or zero cycles
+                # A cycle of < MIN_CYCLE_DAYS days doesn't make sense for reorder detection
+                if avg_cycle < MIN_CYCLE_DAYS:
+                    scores[product_id] = 0.0
+                    continue
 
-            if deviation <= tolerance:
-                # Due soon - high score (CYCLE_SCORE_DUE_MIN to CYCLE_SCORE_DUE_MAX range)
-                score_range = CYCLE_SCORE_DUE_MAX - CYCLE_SCORE_DUE_MIN
-                score = CYCLE_SCORE_DUE_MAX - (deviation / tolerance) * score_range
-            elif days_since > avg_cycle:
-                # Overdue - medium score, decaying with time (CYCLE_SCORE_OVERDUE_MIN to CYCLE_SCORE_OVERDUE_MAX range)
-                overdue_days = days_since - avg_cycle
-                score_range = CYCLE_SCORE_OVERDUE_MAX - CYCLE_SCORE_OVERDUE_MIN
-                score = max(CYCLE_SCORE_OVERDUE_MIN, CYCLE_SCORE_OVERDUE_MAX - (overdue_days / avg_cycle) * score_range)
-            else:
-                # Too early - low score (0 to CYCLE_SCORE_EARLY_MAX range)
-                too_early_days = avg_cycle - days_since
-                score = max(0.0, CYCLE_SCORE_EARLY_MAX - (too_early_days / avg_cycle) * CYCLE_SCORE_EARLY_MAX)
+                # Calculate how close we are to the expected reorder date
+                deviation = abs(days_since - avg_cycle)
+                tolerance = max(CYCLE_TOLERANCE_MIN_DAYS, variance * 0.5)
 
-            scores[product_id] = float(score)
+                if deviation <= tolerance:
+                    # Due soon - high score (CYCLE_SCORE_DUE_MIN to CYCLE_SCORE_DUE_MAX range)
+                    score_range = CYCLE_SCORE_DUE_MAX - CYCLE_SCORE_DUE_MIN
+                    score = CYCLE_SCORE_DUE_MAX - (deviation / tolerance) * score_range
+                elif days_since > avg_cycle:
+                    # Overdue - medium score, decaying with time (CYCLE_SCORE_OVERDUE_MIN to CYCLE_SCORE_OVERDUE_MAX range)
+                    overdue_days = days_since - avg_cycle
+                    score_range = CYCLE_SCORE_OVERDUE_MAX - CYCLE_SCORE_OVERDUE_MIN
+                    score = max(CYCLE_SCORE_OVERDUE_MIN, CYCLE_SCORE_OVERDUE_MAX - (overdue_days / avg_cycle) * score_range)
+                else:
+                    # Too early - low score (0 to CYCLE_SCORE_EARLY_MAX range)
+                    too_early_days = avg_cycle - days_since
+                    score = max(0.0, CYCLE_SCORE_EARLY_MAX - (too_early_days / avg_cycle) * CYCLE_SCORE_EARLY_MAX)
 
-        cursor.close()
+                scores[product_id] = float(score)
+
         logger.debug(f"Cycle scores: {len(scores)} products with detectable cycles")
         return scores
 
     def get_recommendations_for_agreement(self, agreement_id: int, as_of_date: str, top_n: int = 20,
                                          include_discovery: bool = True) -> List[Dict]:
         as_of_date = self._normalize_date(as_of_date)
-        cursor = self._dict_cursor()
 
-        cursor.execute(self._sql("SELECT ClientID FROM dbo.ClientAgreement WHERE ID = ?"), (agreement_id,))
-        result = cursor.fetchone()
-        cursor.close()
+        # Get customer ID from agreement
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql("SELECT ClientID FROM dbo.ClientAgreement WHERE ID = ?"), (agreement_id,))
+            result = cursor.fetchone()
 
         if not result:
             logger.warning(f"Agreement {agreement_id} not found")
@@ -873,6 +861,7 @@ class ImprovedHybridRecommenderV33:
 
         customer_id = result['ClientID']
 
+        # Get segment based on order count
         segment_query = """
         SELECT COUNT(DISTINCT o.ID) as orders_before
         FROM dbo.[Order] o
@@ -880,11 +869,10 @@ class ImprovedHybridRecommenderV33:
               AND o.Created < ?
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(self._sql(segment_query), (agreement_id, as_of_date))
-        row = cursor.fetchone()
-        cursor.close()
-        orders_before = row['orders_before'] if row else 0
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(segment_query), (agreement_id, as_of_date))
+            row = cursor.fetchone()
+            orders_before = row['orders_before'] if row else 0
 
         if orders_before >= SEGMENT_THRESHOLD_HEAVY:
             segment = "HEAVY"
@@ -898,6 +886,7 @@ class ImprovedHybridRecommenderV33:
 
         logger.debug(f"Agreement {agreement_id}: {segment}" + (f" ({subsegment})" if subsegment else ""))
 
+        # Get frequency scores
         frequency_query = """
         SELECT oi.ProductID, COUNT(DISTINCT o.ID) as purchase_count
         FROM dbo.[Order] o
@@ -908,18 +897,17 @@ class ImprovedHybridRecommenderV33:
         GROUP BY oi.ProductID
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(self._sql(frequency_query), (agreement_id, as_of_date))
-
         frequency_scores = {}
         max_count = 1
-        for row in cursor:
-            frequency_scores[row['ProductID']] = row['purchase_count']
-            max_count = max(max_count, row['purchase_count'])
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(frequency_query), (agreement_id, as_of_date))
+            for row in cursor:
+                frequency_scores[row['ProductID']] = row['purchase_count']
+                max_count = max(max_count, row['purchase_count'])
 
         frequency_scores = {pid: count / max_count for pid, count in frequency_scores.items()}
-        cursor.close()
 
+        # Get recency scores
         recency_query = """
         SELECT oi.ProductID, MAX(o.Created) as last_purchase
         FROM dbo.[Order] o
@@ -930,19 +918,16 @@ class ImprovedHybridRecommenderV33:
         GROUP BY oi.ProductID
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(self._sql(recency_query), (agreement_id, as_of_date))
-
         as_of_datetime = datetime.strptime(as_of_date, '%Y-%m-%d')
         recency_scores = {}
 
-        for row in cursor:
-            last_purchase = row['last_purchase']
-            days_ago = (as_of_datetime - last_purchase).days
-            score = math.e ** (-days_ago / RECENCY_DECAY_DAYS)
-            recency_scores[row['ProductID']] = score
-
-        cursor.close()
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(recency_query), (agreement_id, as_of_date))
+            for row in cursor:
+                last_purchase = row['last_purchase']
+                days_ago = (as_of_datetime - last_purchase).days
+                score = math.e ** (-days_ago / RECENCY_DECAY_DAYS)
+                recency_scores[row['ProductID']] = score
 
         # V3.3 ENHANCEMENT: Get co-purchase and cycle scores
         all_repurchase_products = set(frequency_scores.keys()) | set(recency_scores.keys())
@@ -1117,10 +1102,9 @@ class ImprovedHybridRecommenderV33:
         ORDER BY orders_count DESC
         """
 
-        cursor = self._dict_cursor()
-        cursor.execute(self._sql(query), (as_of_date, lookback, as_of_date))
-        rows = cursor.fetchall()
-        cursor.close()
+        with self._cursor_context() as cursor:
+            cursor.execute(self._sql(query), (as_of_date, lookback, as_of_date))
+            rows = cursor.fetchall()
 
         fallback = []
         for idx, row in enumerate(rows):

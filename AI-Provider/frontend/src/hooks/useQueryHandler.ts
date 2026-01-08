@@ -191,6 +191,14 @@ const COLUMN_TRANSLATIONS: Record<string, { uk: string; en: string }> = {
   'week': { uk: 'Тиждень', en: 'Week' },
   'day': { uk: 'День', en: 'Day' },
 
+  // Stock/Inventory specific
+  'uniqueproducts': { uk: 'Унікальних товарів', en: 'Unique Products' },
+  'unique_products': { uk: 'Унікальних товарів', en: 'Unique Products' },
+  'totalstock': { uk: 'Загальний залишок', en: 'Total Stock' },
+  'total_stock': { uk: 'Загальний залишок', en: 'Total Stock' },
+  'stockvalue': { uk: 'Вартість залишків', en: 'Stock Value' },
+  'stock_value': { uk: 'Вартість залишків', en: 'Stock Value' },
+
   // Status
   'status': { uk: 'Статус', en: 'Status' },
   'type': { uk: 'Тип', en: 'Type' },
@@ -254,11 +262,26 @@ const toNumber = (value: unknown): number => {
 };
 
 const pickLabelColumn = (columns: string[], rows: Record<string, unknown>[]): string | null => {
-  const stringColumns = columns.filter((col) => rows.some((row) => typeof row[col] === 'string'));
+  // Filter to only string columns that have actual text content (not numbers as strings, not IDs)
+  const stringColumns = columns.filter((col) => {
+    const lowerCol = col.toLowerCase();
+    // Skip ID columns
+    if (lowerCol === 'id' || lowerCol.endsWith('id') || lowerCol.includes('_id')) return false;
+    // Check if column has string values that are not just numbers
+    return rows.some((row) => {
+      const val = row[col];
+      if (typeof val !== 'string') return false;
+      // Skip if the string is just a number
+      if (/^\d+$/.test(val.trim())) return false;
+      return val.trim().length > 0;
+    });
+  });
+
   if (stringColumns.length === 0) return null;
 
+  // Prefer columns with "name" in them
   const preferred = stringColumns.find((col) =>
-    ['name', 'client', 'customer', 'product', 'vendor', 'brand'].some((kw) => col.toLowerCase().includes(kw))
+    ['name', 'client', 'customer', 'product', 'vendor', 'brand', 'title', 'назва', 'товар', 'клієнт'].some((kw) => col.toLowerCase().includes(kw))
   );
 
   return preferred || stringColumns[0];
@@ -410,7 +433,10 @@ export function useQueryHandler() {
 
       if (data.execution?.success && Array.isArray(data.execution.rows) && data.execution.rows.length > 0) {
         const results = data.execution.rows;
-        const columns = Array.isArray(data.execution.columns) ? data.execution.columns : [];
+        // Fallback: if columns not provided, infer from first row keys
+        let columns = Array.isArray(data.execution.columns) && data.execution.columns.length > 0
+          ? data.execution.columns
+          : Object.keys(results[0] || {});
         const rowCount = typeof data.execution.row_count === 'number' ? data.execution.row_count : results.length;
         const shownCount = results.length;
         const isRanking = isRankingQuery(query);

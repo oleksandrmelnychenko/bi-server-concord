@@ -247,7 +247,7 @@ export const StatCard: React.FC<EnhancedStatCardData> = ({
   const renderValue = () => {
     if (!isNumber || !animate) {
       if (format === 'currency') {
-        return `${formatCompact(numericValue)} ₴`;
+        return `${formatCompact(numericValue)} UAH`;
       }
       if (format === 'percent') {
         return `${numericValue.toFixed(1)}%`;
@@ -255,7 +255,7 @@ export const StatCard: React.FC<EnhancedStatCardData> = ({
       return formatCompact(numericValue);
     }
 
-    const suffix = format === 'currency' ? ' ₴' : format === 'percent' ? '%' : '';
+    const suffix = format === 'currency' ? ' UAH' : format === 'percent' ? '%' : '';
     const decimals = format === 'percent' ? 1 : 0;
 
     // Determine if we need to compact the number

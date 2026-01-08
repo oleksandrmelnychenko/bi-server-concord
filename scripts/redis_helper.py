@@ -10,9 +10,13 @@ logger = logging.getLogger(__name__)
 REDIS_HOST = os.getenv('REDIS_HOST', '127.0.0.1')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
-WEEKLY_TTL = int(os.getenv('WEEKLY_TTL', 604800))  # 7 days (exactly 1 week) - FIXED from 8 days
+CACHE_TTL = int(os.getenv('CACHE_TTL', 604800))  # 7 days default
 
-class WeeklyRecommendationCache:
+# Unified cache key pattern
+CACHE_KEY_PREFIX = "recommendations:customer"
+
+
+class RecommendationCache:
 
     def __init__(self, host: str = REDIS_HOST, port: int = REDIS_PORT, db: int = REDIS_DB):
         try:
@@ -32,27 +36,30 @@ class WeeklyRecommendationCache:
             raise
 
     @staticmethod
-    def get_week_key(date: Optional[datetime] = None) -> str:
+    def get_date_key(date: Optional[datetime] = None) -> str:
+        """Get date string for cache key (YYYY-MM-DD format)."""
         if date is None:
             date = datetime.now()
+        return date.strftime('%Y-%m-%d')
 
-        year, week, _ = date.isocalendar()
-        return f"{year}_W{week:02d}"
-
-    def get_redis_key(self, customer_id: int, week_key: Optional[str] = None) -> str:
-        if week_key is None:
-            week_key = self.get_week_key()
-        return f"weekly_recs:{week_key}:{customer_id}"
+    def get_redis_key(self, customer_id: int, as_of_date: Optional[str] = None) -> str:
+        """
+        Get unified cache key for a customer's recommendations.
+        Pattern: recommendations:customer:{customer_id}:{as_of_date}
+        """
+        if as_of_date is None:
+            as_of_date = self.get_date_key()
+        return f"{CACHE_KEY_PREFIX}:{customer_id}:{as_of_date}"
 
     def store_recommendations(
         self,
         customer_id: int,
         recommendations: List[Dict[str, Any]],
-        week_key: Optional[str] = None,
-        ttl: int = WEEKLY_TTL
+        as_of_date: Optional[str] = None,
+        ttl: int = CACHE_TTL
     ) -> bool:
         try:
-            key = self.get_redis_key(customer_id, week_key)
+            key = self.get_redis_key(customer_id, as_of_date)
             value = json.dumps(recommendations)
             self.client.setex(key, ttl, value)
             logger.debug(f"Stored {len(recommendations)} recommendations for customer {customer_id} (key: {key}, TTL: {ttl}s)")
@@ -64,10 +71,10 @@ class WeeklyRecommendationCache:
     def get_recommendations(
         self,
         customer_id: int,
-        week_key: Optional[str] = None
+        as_of_date: Optional[str] = None
     ) -> Optional[List[Dict[str, Any]]]:
         try:
-            key = self.get_redis_key(customer_id, week_key)
+            key = self.get_redis_key(customer_id, as_of_date)
             value = self.client.get(key)
 
             if value is None:
@@ -85,10 +92,10 @@ class WeeklyRecommendationCache:
     def delete_recommendations(
         self,
         customer_id: int,
-        week_key: Optional[str] = None
+        as_of_date: Optional[str] = None
     ) -> bool:
         try:
-            key = self.get_redis_key(customer_id, week_key)
+            key = self.get_redis_key(customer_id, as_of_date)
             deleted = self.client.delete(key)
             logger.debug(f"Deleted recommendations for customer {customer_id} (key: {key})")
             return deleted > 0
@@ -96,43 +103,45 @@ class WeeklyRecommendationCache:
             logger.error(f"Failed to delete recommendations for customer {customer_id}: {e}")
             return False
 
-    def clear_week(self, week_key: Optional[str] = None) -> int:
+    def clear_date(self, as_of_date: Optional[str] = None) -> int:
+        """Clear all recommendations for a specific date."""
         try:
-            if week_key is None:
-                week_key = self.get_week_key()
+            if as_of_date is None:
+                as_of_date = self.get_date_key()
 
-            pattern = f"weekly_recs:{week_key}:*"
+            pattern = f"{CACHE_KEY_PREFIX}:*:{as_of_date}"
             keys = list(self.client.scan_iter(match=pattern, count=100))
 
             if keys:
                 deleted = self.client.delete(*keys)
-                logger.info(f"Cleared {deleted} recommendations for week {week_key}")
+                logger.info(f"Cleared {deleted} recommendations for date {as_of_date}")
                 return deleted
             else:
-                logger.info(f"No recommendations found for week {week_key}")
+                logger.info(f"No recommendations found for date {as_of_date}")
                 return 0
 
         except Exception as e:
-            logger.error(f"Failed to clear week {week_key}: {e}")
+            logger.error(f"Failed to clear date {as_of_date}: {e}")
             return 0
 
-    def get_cached_customer_count(self, week_key: Optional[str] = None) -> int:
+    def get_cached_customer_count(self, as_of_date: Optional[str] = None) -> int:
+        """Count how many customers have cached recommendations for a date."""
         try:
-            if week_key is None:
-                week_key = self.get_week_key()
+            if as_of_date is None:
+                as_of_date = self.get_date_key()
 
-            pattern = f"weekly_recs:{week_key}:*"
+            pattern = f"{CACHE_KEY_PREFIX}:*:{as_of_date}"
             count = sum(1 for _ in self.client.scan_iter(match=pattern, count=100))
-            logger.debug(f"Found {count} cached customers for week {week_key}")
+            logger.debug(f"Found {count} cached customers for date {as_of_date}")
             return count
 
         except Exception as e:
             logger.error(f"Failed to count cached customers: {e}")
             return 0
 
-    def get_ttl(self, customer_id: int, week_key: Optional[str] = None) -> Optional[int]:
+    def get_ttl(self, customer_id: int, as_of_date: Optional[str] = None) -> Optional[int]:
         try:
-            key = self.get_redis_key(customer_id, week_key)
+            key = self.get_redis_key(customer_id, as_of_date)
             ttl = self.client.ttl(key)
 
             if ttl == -2:
@@ -159,15 +168,19 @@ class WeeklyRecommendationCache:
         except Exception as e:
             logger.error(f"Error closing Redis connection: {e}")
 
+# Backward compatibility alias
+WeeklyRecommendationCache = RecommendationCache
+
+
 def test_redis_connection():
     try:
-        cache = WeeklyRecommendationCache()
+        cache = RecommendationCache()
 
         assert cache.ping(), "Redis ping failed"
         print("✓ Redis connection successful")
 
-        week_key = cache.get_week_key()
-        print(f"✓ Current week key: {week_key}")
+        date_key = cache.get_date_key()
+        print(f"✓ Current date key: {date_key}")
 
         test_customer = 999999
         test_recs = [

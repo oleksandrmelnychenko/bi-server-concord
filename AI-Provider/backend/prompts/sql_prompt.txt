@@ -11,6 +11,7 @@ CRITICAL RULES:
 - Use TOP N (not LIMIT) for row limits
 - Use [dbo].[TableName] with brackets for reserved words like [Order]
 - Add WHERE alias.Deleted = 0 for soft-delete tables
+- ALWAYS use short aliases for every table in FROM/JOIN (e.g., FROM dbo.[User] u). Never use SQL keywords (WHERE, AND, OR) as aliases.
 - Use N'text' for Ukrainian/Cyrillic string literals
 - Format dates as 'YYYY-MM-DD'
 - Order.ClientID does NOT exist; join Client -> ClientAgreement -> Order (Order.ClientAgreementID)
@@ -18,9 +19,12 @@ CRITICAL RULES:
 - Region filter: use RegionID with Region.Name lookup (no Region column on Client)
 - Brands via Product.VendorCode prefixes (e.g., 'SEM%', 'MG%')
 - Stock via ProductAvailability.Amount joined to ProductID/StorageID
+- WAREHOUSE SHIPMENTS: Use Consignment.StorageID -> Storage.ID (NOT OrderItem.StorageId which is always NULL!)
 - No Product.Price/CostPrice; use OrderItem.PricePerItem or ProductPricing.Price
 - SUPPLIERS: SupplyOrder.ClientID -> Client table (the Client acts as SUPPLIER). Filter WHERE Client.SupplierName IS NOT NULL to identify suppliers (vs customers)
 - For supplier payments: OutcomePaymentOrder -> SupplyOrganizationAgreement -> SupplyOrganization
+- CUSTOMER PAYMENTS: IncomePaymentOrder.ClientID -> Client.ID directly! NOT through ClientAgreement!
+- BANK USAGE: Bank table is NOT directly linked to clients/orders! For "which bank is most used", use PaymentRegister.BankName (text field with bank names)
 
 KEY SCHEMA RELATIONSHIPS:
 - Order has NO ClientID column! Join path: Order.ClientAgreementID -> ClientAgreement.ClientID -> Client.ID

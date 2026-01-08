@@ -31,7 +31,7 @@ class WeeklyRecommendationWorker:
         self.dry_run = dry_run
         self.num_workers = num_workers
         self.cache = None if dry_run else WeeklyRecommendationCache()
-        self.week_key = WeeklyRecommendationCache.get_week_key()
+        self.as_of_date = datetime.now().strftime('%Y-%m-%d')
 
         self.stats = {
             'total_clients': 0,
@@ -48,15 +48,17 @@ class WeeklyRecommendationWorker:
         logger.info(f"Fetching active clients (orders in last {ACTIVE_DAYS_THRESHOLD} days)...")
 
         conn = get_connection()
+        cursor = None
         try:
             cursor = conn.cursor(as_dict=True)
 
-            query = f"""
+            # Use parameterized query for ACTIVE_DAYS_THRESHOLD
+            query = """
             SELECT DISTINCT c.ID
             FROM dbo.Client c
             INNER JOIN dbo.ClientAgreement ca ON c.ID = ca.ClientID
             INNER JOIN dbo.[Order] o ON ca.ID = o.ClientAgreementID
-            WHERE o.Created >= DATEADD(day, -{ACTIVE_DAYS_THRESHOLD}, GETDATE())
+            WHERE o.Created >= DATEADD(day, -%s, GETDATE())
                   AND c.IsActive = 1
                   AND c.IsBlocked = 0
                   AND c.Deleted = 0
@@ -66,14 +68,15 @@ class WeeklyRecommendationWorker:
             if limit:
                 query = query.replace("SELECT DISTINCT", f"SELECT DISTINCT TOP {limit}")
 
-            cursor.execute(query)
+            cursor.execute(query, (ACTIVE_DAYS_THRESHOLD,))
             clients = [row['ID'] for row in cursor]
-            cursor.close()
 
             logger.info(f"Found {len(clients)} active clients")
             return clients
 
         finally:
+            if cursor:
+                cursor.close()
             conn.close()
 
     def process_client(self, customer_id: int) -> Tuple[int, bool, int, int, str]:
@@ -82,10 +85,9 @@ class WeeklyRecommendationWorker:
 
             recommender = ImprovedHybridRecommenderV33(conn=conn, use_cache=True)
 
-            as_of_date = datetime.now().strftime('%Y-%m-%d')
             recommendations = recommender.get_recommendations(
                 customer_id=customer_id,
-                as_of_date=as_of_date,
+                as_of_date=self.as_of_date,
                 top_n=RECOMMENDATIONS_PER_CLIENT,
                 include_discovery=True
             )
@@ -97,7 +99,7 @@ class WeeklyRecommendationWorker:
                 success = self.cache.store_recommendations(
                     customer_id=customer_id,
                     recommendations=recommendations,
-                    week_key=self.week_key
+                    as_of_date=self.as_of_date
                 )
                 if not success:
                     return (customer_id, False, 0, 0, "Failed to store in Redis")
@@ -119,9 +121,9 @@ class WeeklyRecommendationWorker:
 
     def run(self, limit: int = None):
         logger.info("=" * 80)
-        logger.info("WEEKLY RECOMMENDATION WORKER")
+        logger.info("RECOMMENDATION WORKER")
         logger.info("=" * 80)
-        logger.info(f"Week: {self.week_key}")
+        logger.info(f"Date: {self.as_of_date}")
         logger.info(f"Recommendations per client: {RECOMMENDATIONS_PER_CLIENT}")
         logger.info(f"Workers: {self.num_workers}")
         logger.info(f"Dry run: {self.dry_run}")
@@ -178,7 +180,7 @@ class WeeklyRecommendationWorker:
         logger.info("\n" + "=" * 80)
         logger.info("JOB SUMMARY")
         logger.info("=" * 80)
-        logger.info(f"Week: {self.week_key}")
+        logger.info(f"Date: {self.as_of_date}")
         logger.info(f"Total clients: {self.stats['total_clients']}")
         logger.info(f"Processed: {self.stats['processed']}")
         logger.info(f"Successful: {self.stats['successful']}")

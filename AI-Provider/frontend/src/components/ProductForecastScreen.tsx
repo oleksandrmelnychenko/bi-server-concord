@@ -46,53 +46,56 @@ export function ProductForecastScreen({
 
   return (
     <>
-      {/* Backdrop */}
+      {/* Mobile overlay backdrop */}
       <div
-        className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 transition-opacity"
+        className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40 lg:hidden"
         onClick={onClose}
       />
 
-      {/* Side Panel */}
-      <aside
-        className="fixed right-0 top-0 h-full z-50 w-[680px] max-w-[90vw] bg-white border-l border-slate-200 shadow-2xl flex flex-col overflow-hidden transition-transform duration-300"
+      {/* Side Panel - matching insight panel design */}
+      <div
+        className="fixed right-6 top-6 bottom-6 w-[90vw] max-w-[680px] overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-2xl p-5 z-50 flex flex-col"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 bg-gradient-to-r from-emerald-50 to-slate-50 flex-shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-lg bg-emerald-500 flex items-center justify-center shadow-md flex-shrink-0">
-              <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-              </svg>
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-base font-bold text-slate-800 truncate">
+        <div className="flex items-start justify-between gap-2 mb-4">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-lg font-semibold text-slate-800">
                 {productName || `${t('Товар', 'Product')} #${productId}`}
               </h2>
-              <div className="flex items-center gap-2 text-xs text-slate-500">
-                {vendorCode && <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{vendorCode}</span>}
-                {category && <span className="truncate">{category}</span>}
-              </div>
+              {category && (
+                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-100 text-emerald-700">
+                  {category}
+                </span>
+              )}
             </div>
+            {vendorCode && (
+              <div className="text-sm text-slate-500 mt-1">
+                {t('Артикул', 'SKU')}: <span className="font-mono">{vendorCode}</span>
+              </div>
+            )}
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors flex-shrink-0"
+            className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+            aria-label="Close"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M18 6L6 18" />
+              <path d="M6 6l12 12" />
             </svg>
           </button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+        <div className="flex-1 flex flex-col space-y-4 overflow-y-auto">
           {loading ? (
-            <div className="flex flex-col items-center justify-center py-16">
-              <div className="w-10 h-10 border-4 border-emerald-200 border-t-emerald-500 rounded-full animate-spin mb-3" />
-              <p className="text-sm text-slate-500">{t('Генерація прогнозування...', 'Generating forecast...')}</p>
+            <div className="flex-1 flex items-center justify-center gap-3 text-sm text-slate-500">
+              <div className="w-6 h-6 border-2 border-slate-300 border-t-emerald-600 rounded-full animate-spin" />
+              {t('Генерація прогнозування...', 'Generating forecast...')}
             </div>
           ) : error ? (
-            <div className="flex flex-col items-center justify-center py-16 text-red-500">
+            <div className="flex-1 flex flex-col items-center justify-center text-red-500">
               <svg className="w-10 h-10 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -103,25 +106,25 @@ export function ProductForecastScreen({
               {/* Forecast Summary Cards */}
               {forecast?.summary && (
                 <div className="grid grid-cols-4 gap-3">
-                  <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-lg p-3 text-white shadow">
-                    <div className="text-[10px] opacity-80 uppercase">{t('Прогноз', 'Forecast')}</div>
-                    <div className="text-xl font-bold">{forecast.summary.total_predicted_quantity?.toLocaleString()}</div>
-                    <div className="text-[9px] opacity-60">{forecast.forecast_period_weeks} {t('тижнів', 'weeks')}</div>
+                  <div className="bg-emerald-50/60 border border-emerald-300 rounded-lg p-3">
+                    <div className="text-[10px] text-emerald-600 uppercase font-medium">{t('Прогноз', 'Forecast')}</div>
+                    <div className="text-xl font-bold text-emerald-700">{forecast.summary.total_predicted_quantity?.toLocaleString()}</div>
+                    <div className="text-[9px] text-emerald-500">{forecast.forecast_period_weeks} {t('тижнів', 'weeks')}</div>
                   </div>
-                  <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-3 text-white shadow">
-                    <div className="text-[10px] opacity-80 uppercase">{t('Дохід', 'Revenue')}</div>
-                    <div className="text-xl font-bold">{forecast.summary.total_predicted_revenue?.toLocaleString() || '—'}</div>
-                    <div className="text-[9px] opacity-60">UAH</div>
+                  <div className="bg-blue-50/60 border border-blue-300 rounded-lg p-3">
+                    <div className="text-[10px] text-blue-600 uppercase font-medium">{t('Дохід', 'Revenue')}</div>
+                    <div className="text-xl font-bold text-blue-700">{forecast.summary.total_predicted_revenue?.toLocaleString() || '—'}</div>
+                    <div className="text-[9px] text-blue-500">UAH</div>
                   </div>
-                  <div className="bg-gradient-to-br from-violet-500 to-violet-600 rounded-lg p-3 text-white shadow">
-                    <div className="text-[10px] opacity-80 uppercase">{t('Активні', 'Active')}</div>
-                    <div className="text-xl font-bold">{forecast.summary.active_customers}</div>
-                    <div className="text-[9px] opacity-60">{t('клієнтів', 'customers')}</div>
+                  <div className="bg-violet-50/60 border border-violet-300 rounded-lg p-3">
+                    <div className="text-[10px] text-violet-600 uppercase font-medium">{t('Активні', 'Active')}</div>
+                    <div className="text-xl font-bold text-violet-700">{forecast.summary.active_customers}</div>
+                    <div className="text-[9px] text-violet-500">{t('клієнтів', 'customers')}</div>
                   </div>
-                  <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-lg p-3 text-white shadow">
-                    <div className="text-[10px] opacity-80 uppercase">{t('Ризик', 'At Risk')}</div>
-                    <div className="text-xl font-bold">{forecast.summary.at_risk_customers}</div>
-                    <div className="text-[9px] opacity-60">{t('клієнтів', 'customers')}</div>
+                  <div className="bg-amber-50/60 border border-amber-300 rounded-lg p-3">
+                    <div className="text-[10px] text-amber-600 uppercase font-medium">{t('Ризик', 'At Risk')}</div>
+                    <div className="text-xl font-bold text-amber-700">{forecast.summary.at_risk_customers}</div>
+                    <div className="text-[9px] text-amber-500">{t('клієнтів', 'customers')}</div>
                   </div>
                 </div>
               )}
@@ -460,7 +463,7 @@ export function ProductForecastScreen({
             </>
           )}
         </div>
-      </aside>
+      </div>
     </>
   );
 }

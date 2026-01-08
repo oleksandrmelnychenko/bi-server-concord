@@ -26,20 +26,75 @@ const inferStringType = (value: string): ColumnDefinition['type'] => {
   return 'string';
 };
 
-const resolveColumnType = (value: unknown, column: ColumnDefinition): ColumnDefinition['type'] => {
+// Detect column semantic type based on column name
+type ExtendedColumnType = ColumnDefinition['type'] | 'year' | 'id';
+
+const inferColumnTypeFromName = (columnKey: string): ExtendedColumnType | null => {
+  const lower = columnKey.toLowerCase();
+
+  // Year columns - should NOT be formatted with separators
+  if (/^(year|рік|rok|год)$/i.test(lower) || lower.endsWith('year')) {
+    return 'year';
+  }
+
+  // ID columns - should NOT be formatted
+  if (lower === 'id' || lower.endsWith('id')) {
+    return 'id';
+  }
+
+  // Currency/Money columns - should have 2 decimals and thousand separators
+  const currencyPatterns = [
+    /^(amount|total|sum|price|revenue|payment|debt|balance|cost|margin|profit)$/i,
+    /^(сума|борг|баланс|оплата|платіж|виручка|дохід|прибуток|ціна|вартість)$/i,
+    /(amount|total|sum|price|revenue|payments?|debts?)$/i,
+    /(сума|борг|баланс|оплата|платіж|виручка)$/i,
+  ];
+  if (currencyPatterns.some(p => p.test(lower))) {
+    return 'currency';
+  }
+
+  // Quantity columns - integer formatting
+  if (/^(qty|quantity|count|cnt|кількість)$/i.test(lower) || lower.endsWith('count')) {
+    return 'number';
+  }
+
+  return null;
+};
+
+const resolveColumnType = (value: unknown, column: ColumnDefinition): ExtendedColumnType => {
   if (column.type) return column.type;
+
+  // First check column name for semantic type
+  const nameType = inferColumnTypeFromName(column.key);
+  if (nameType) return nameType;
+
   if (value instanceof Date) return 'date';
-  if (typeof value === 'number') return 'number';
+  if (typeof value === 'number') {
+    // Check if it looks like a year (1900-2100 range, integer)
+    if (Number.isInteger(value) && value >= 1900 && value <= 2100) {
+      return 'year';
+    }
+    return 'number';
+  }
   if (typeof value === 'boolean') return 'boolean';
   if (typeof value === 'string') return inferStringType(value);
   return 'string';
 };
 
-const formatNumber = (value: number, maximumFractionDigits = 3): string => {
+const formatCurrency = (value: number): string => {
+  // Always show 2 decimal places for currency, with thousand separators
+  return value.toLocaleString('uk-UA', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+};
+
+const formatQuantity = (value: number): string => {
+  // Quantities: show decimals only if not integer, max 3 decimals
   const isInt = Number.isInteger(value);
   return value.toLocaleString('uk-UA', {
     minimumFractionDigits: 0,
-    maximumFractionDigits: isInt ? 0 : maximumFractionDigits,
+    maximumFractionDigits: isInt ? 0 : 3,
   });
 };
 
@@ -50,14 +105,19 @@ const formatValue = (value: unknown, column: ColumnDefinition): string => {
   const columnType = resolveColumnType(value, column);
 
   switch (columnType) {
+    case 'year':
+      // Years should NOT have thousand separators (2024, not 2,024)
+      return String(value);
+    case 'id':
+      // IDs should NOT be formatted
+      return String(value);
     case 'number':
-      return typeof value === 'number' ? formatNumber(value) : String(value);
+      return typeof value === 'number' ? formatQuantity(value) : String(value);
     case 'currency':
-      return typeof value === 'number'
-        ? `${value.toLocaleString('uk-UA', { minimumFractionDigits: 2, maximumFractionDigits: 3 })} UAH`
-        : String(value);
+      // Currency: always 2 decimal places with thousand separators
+      return typeof value === 'number' ? formatCurrency(value) : String(value);
     case 'percent':
-      return typeof value === 'number' ? `${value.toFixed(3)}%` : String(value);
+      return typeof value === 'number' ? `${value.toFixed(2)}%` : String(value);
     case 'date':
       if (value instanceof Date) {
         return value.toLocaleDateString('uk-UA');
