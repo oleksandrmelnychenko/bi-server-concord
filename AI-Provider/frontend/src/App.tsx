@@ -12,13 +12,20 @@ import {
   fetchForecastForProduct,
   fetchProductsByIds,
   fetchClientById,
+  fetchClientScore,
   type FullRecommendationResponse,
   type RecommendationCharts,
   type RecommendationProof,
   type ProductForecastResponse,
   type ProductCharts,
   type ProductProof,
+  type ClientScoreData,
 } from './services/api';
+import { ClientScorePanel } from './components/ClientScorePanel';
+import { LiveDashboard } from './components/LiveDashboard';
+import { StorageListPanel } from './components/StorageListPanel';
+import { ManagerListPanel } from './components/ManagerListPanel';
+import { OrderRecommendationsPanel } from './components/OrderRecommendationsPanel';
 
 const isAbortError = (error: unknown): boolean => {
   if (error instanceof DOMException) {
@@ -94,6 +101,24 @@ const [insight, setInsight] = useState<{
     charts: null,
     proof: null,
   });
+  const [scorePanel, setScorePanel] = useState<{
+    open: boolean;
+    loading: boolean;
+    error?: string | null;
+    clientId?: number;
+    clientName?: string | null;
+    scoreData?: ClientScoreData | null;
+  }>({
+    open: false,
+    loading: false,
+    error: null,
+    scoreData: null,
+  });
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [showStoragePanel, setShowStoragePanel] = useState(false);
+  const [showManagerPanel, setShowManagerPanel] = useState(false);
+  const [showOrderRecommendations, setShowOrderRecommendations] = useState(false);
+  const scorePanelController = useRef<AbortController | null>(null);
   const productForecastController = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -301,7 +326,22 @@ const [insight, setInsight] = useState<{
         k.includes('productgroup') || k.includes('product_group') ||
         k.includes('sku') || k.includes('productid') || k.includes('product_id') ||
         k.includes('price') || k.includes('qty') || k.includes('quantity') ||
-        k === 'product' || k === 'товар' || k === 'артикул'
+        k.includes('totalsold') || k.includes('total_sold') ||
+        k.includes('productname') || k.includes('product_name') ||
+        k === 'product' || k === 'товар' || k === 'артикул' || k === 'originalvendorcode'
+      );
+
+      // Check for VendorCode value pattern (looks like product SKU: letters+numbers like "MG35693-1")
+      const hasVendorCodeValue = Object.values(row).some(v =>
+        typeof v === 'string' && /^[A-Z]{2,}[\d-]+[A-Z\d]*$/i.test(v.trim())
+      );
+
+      // Check for client-like name values (Ukrainian names with ФОП, ТОВ, ПП, etc.)
+      const hasClientNameValue = Object.values(row).some(v =>
+        typeof v === 'string' && (
+          /\b(ФОП|ТОВ|ПП|ТзОВ|ПАТ|ПрАТ|КП|ОП)\b/i.test(v) ||  // Ukrainian business types
+          /^[А-ЯІЇЄҐ][а-яіїєґ']+\s+[А-ЯІЇЄҐ][а-яіїєґ']+/u.test(v.trim())  // Ukrainian name pattern
+        )
       );
 
       // Client context indicators
@@ -310,12 +350,12 @@ const [insight, setInsight] = useState<{
         k.includes('segment') || k.includes('clientid') || k.includes('client_id') ||
         k.includes('customer') || k.includes('клієнт') || k.includes('client') ||
         k === 'fullname' || k === 'firstname' || k === 'lastname'
-      );
+      ) || hasClientNameValue;  // Also treat as client if name looks like a client name
 
-      // Check if looks like a Product table query (has ID + Name but no client columns)
-      const looksLikeProductTable = keys.includes('id') &&
-        (keys.includes('name') || keys.includes('vendorcode') || keys.includes('deleted')) &&
-        !hasClientContext;
+      // Check if looks like a Product table query (has ID + VendorCode pattern, but NOT client-like names)
+      const looksLikeProductTable = (keys.includes('id') || keys.includes('rank')) &&
+        (keys.includes('vendorcode') || hasVendorCodeValue) &&
+        !hasClientContext && !hasClientNameValue;
 
       // Extract numeric IDs for API calls
       let clientId: number | undefined;
@@ -329,9 +369,16 @@ const [insight, setInsight] = useState<{
       if (!clientId && !productId) {
         const genericId = extractNumericId(row, ['id']);
         if (genericId) {
-          if ((hasProductContext || looksLikeProductTable) && !hasClientContext) {
+          // Priority: VendorCode (definitive product) > business name > column-based > default
+          if (hasVendorCodeValue) {
+            // Has VendorCode pattern (like MG35693) - DEFINITELY a product!
             productId = genericId;
-          } else if (hasClientContext && !hasProductContext && !looksLikeProductTable) {
+          } else if (hasClientNameValue) {
+            // Ukrainian business name or person name - definitely a client
+            clientId = genericId;
+          } else if ((hasProductContext || looksLikeProductTable) && !hasClientContext) {
+            productId = genericId;
+          } else if (hasClientContext) {
             clientId = genericId;
           } else {
             // Default to client context if truly ambiguous
@@ -422,13 +469,58 @@ const [insight, setInsight] = useState<{
         error: null,
       });
 
+      // Also open the score panel on the LEFT side for client payment score
+      if (clientId !== undefined) {
+        // Abort previous score request
+        scorePanelController.current?.abort();
+        const scoreController = new AbortController();
+        scorePanelController.current = scoreController;
+
+        setScorePanel({
+          open: true,
+          loading: true,
+          error: null,
+          clientId,
+          clientName: rowClientName || null,
+          scoreData: null,
+        });
+
+        // Fetch client score in parallel
+        fetchClientScore(clientId, scoreController.signal)
+          .then((response) => {
+            if (!scoreController.signal.aborted && response) {
+              setScorePanel((prev) => ({
+                ...prev,
+                loading: false,
+                clientName: response.client_name || prev.clientName,
+                scoreData: response.score,
+              }));
+            }
+          })
+          .catch((err) => {
+            if (!scoreController.signal.aborted) {
+              setScorePanel((prev) => ({
+                ...prev,
+                loading: false,
+                error: err instanceof Error ? err.message : 'Failed to load score',
+              }));
+            }
+          });
+      }
+
       // Fetch client name IMMEDIATELY (fast) - don't wait for recommendations
       if (clientId !== undefined) {
         fetchClientById(clientId).then((clientDetails) => {
           if (insightRequestRef.current === requestId && clientDetails) {
+            const clientName = (clientDetails?.FullName as string) || (clientDetails?.Name as string) || undefined;
             setInsight((prev) => ({
               ...prev,
-              clientName: (clientDetails?.FullName as string) || (clientDetails?.Name as string) || undefined,
+              clientName,
+            }));
+            // Also update score panel client name
+            setScorePanel((prev) => ({
+              ...prev,
+              clientName: prev.clientName || clientName,
             }));
           }
         }).catch(() => {});
@@ -443,7 +535,7 @@ const [insight, setInsight] = useState<{
                   insightControllers.current.push(controller);
                   return fetchFullRecommendations(clientId, controller.signal);
                 },
-                30000,
+                90000,  // 90 seconds - recommendations can be slow without Redis cache
                 'Recommendations'
               ).catch((err) => { console.error('Recs error:', err); return null as FullRecommendationResponse | null; })
             : Promise.resolve(null as FullRecommendationResponse | null),
@@ -591,6 +683,74 @@ const [insight, setInsight] = useState<{
             </button>
           </div>
 
+          {/* Live Dashboard Button */}
+          <div className={`px-3 mt-1 ${sidebarOpen ? '' : 'flex justify-center'}`}>
+            <button
+              onClick={() => { setShowDashboard(true); setSidebarOpen(false); }}
+              className={`
+                flex items-center gap-3 rounded-lg transition-all
+                ${sidebarOpen
+                  ? 'w-full px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100'
+                  : 'w-10 h-10 justify-center text-slate-600 hover:bg-slate-100'
+                }
+              `}
+              title={language === 'uk' ? 'Live Dashboard' : 'Live Dashboard'}
+            >
+              <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+              {sidebarOpen && <span>Live Dashboard</span>}
+            </button>
+          </div>
+
+          {/* Storage List Button */}
+          <div className={`px-3 mt-1 ${sidebarOpen ? '' : 'flex justify-center'}`}>
+            <button
+              onClick={() => { setShowStoragePanel(!showStoragePanel); }}
+              className={`
+                flex items-center gap-3 rounded-lg transition-all
+                ${showStoragePanel
+                  ? 'bg-indigo-50 text-indigo-700'
+                  : 'text-slate-600 hover:bg-slate-100'
+                }
+                ${sidebarOpen
+                  ? 'w-full px-4 py-2.5 text-sm font-medium'
+                  : 'w-10 h-10 justify-center'
+                }
+              `}
+              title={language === 'uk' ? 'Склади' : 'Storages'}
+            >
+              <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+              </svg>
+              {sidebarOpen && <span>{language === 'uk' ? 'Склади' : 'Storages'}</span>}
+            </button>
+          </div>
+
+          {/* Manager List Button */}
+          <div className={`px-3 mt-1 ${sidebarOpen ? '' : 'flex justify-center'}`}>
+            <button
+              onClick={() => { setShowManagerPanel(!showManagerPanel); }}
+              className={`
+                flex items-center gap-3 rounded-lg transition-all
+                ${showManagerPanel
+                  ? 'bg-violet-50 text-violet-700'
+                  : 'text-slate-600 hover:bg-slate-100'
+                }
+                ${sidebarOpen
+                  ? 'w-full px-4 py-2.5 text-sm font-medium'
+                  : 'w-10 h-10 justify-center'
+                }
+              `}
+              title={language === 'uk' ? 'Менеджери' : 'Managers'}
+            >
+              <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+              </svg>
+              {sidebarOpen && <span>{language === 'uk' ? 'Менеджери' : 'Managers'}</span>}
+            </button>
+          </div>
+
           {/* Recent Chats - Only show when expanded */}
           {sidebarOpen && (
             <div className="flex-1 overflow-y-auto px-3 mt-4">
@@ -629,6 +789,51 @@ const [insight, setInsight] = useState<{
             </div>
           </div>
         </aside>
+
+        {/* Client Score Panel (left side) */}
+        <ClientScorePanel
+          open={scorePanel.open}
+          loading={scorePanel.loading}
+          error={scorePanel.error}
+          clientId={scorePanel.clientId}
+          clientName={scorePanel.clientName}
+          scoreData={scorePanel.scoreData}
+          sidebarOpen={sidebarOpen}
+          onClose={() => setScorePanel((prev) => ({ ...prev, open: false }))}
+        />
+
+        {/* Live Dashboard Modal */}
+        {showDashboard && (
+          <LiveDashboard onClose={() => setShowDashboard(false)} />
+        )}
+
+        {/* Order Recommendations Panel */}
+        <OrderRecommendationsPanel
+          open={showOrderRecommendations}
+          onClose={() => setShowOrderRecommendations(false)}
+          language={language}
+        />
+
+        {/* Storage List Panel (left side) */}
+        <StorageListPanel
+          open={showStoragePanel}
+          sidebarOpen={sidebarOpen}
+          onStorageSelect={(storage) => {
+            console.log('Selected storage:', storage);
+          }}
+          onClose={() => setShowStoragePanel(false)}
+        />
+
+        {/* Manager List Panel (left side, positioned below storage if both open) */}
+        <ManagerListPanel
+          open={showManagerPanel}
+          sidebarOpen={sidebarOpen}
+          storagesPanelOpen={showStoragePanel}
+          onManagerSelect={(manager) => {
+            console.log('Selected manager:', manager);
+          }}
+          onClose={() => setShowManagerPanel(false)}
+        />
 
         {/* Insight Panel (right side) */}
         {insight.open && (
@@ -1236,6 +1441,30 @@ const [insight, setInsight] = useState<{
                   <span className={`w-2 h-2 rounded-full ${apiStatus.online ? 'bg-emerald-500' : 'bg-rose-500'}`} />
                   {apiStatus.online ? 'Online' : 'Offline'}
                 </div>
+
+                <button
+                  onClick={() => setShowDashboard(true)}
+                  className="flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700
+                             hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                  title="Live Dashboard"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  <span className="hidden sm:inline">Live</span>
+                </button>
+
+                <button
+                  onClick={() => setShowOrderRecommendations(true)}
+                  className="flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700
+                             hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 transition-colors"
+                  title={language === 'uk' ? 'Рекомендації замовлень' : 'Order Recommendations'}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+                  </svg>
+                  <span className="hidden sm:inline">{language === 'uk' ? 'Замовлення' : 'Orders'}</span>
+                </button>
 
                 <button
                   onClick={toggleLanguage}

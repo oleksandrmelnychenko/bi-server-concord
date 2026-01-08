@@ -261,6 +261,79 @@ async def execute_sql(request: ExecuteRequest):
         )
 
 
+@app.get("/storages")
+async def get_storages():
+    """
+    Get all active storages/warehouses for the storage list panel.
+    Returns list of storages with ID and Name.
+    """
+    from sqlalchemy import text
+
+    try:
+        sql = """
+        SELECT ID, Name
+        FROM dbo.Storage
+        WHERE Deleted = 0
+        ORDER BY Name
+        """
+
+        with schema_extractor.engine.connect() as conn:
+            result = conn.execute(text(sql))
+            storages = [
+                {
+                    "id": row[0],
+                    "name": row[1]
+                }
+                for row in result.fetchall()
+            ]
+
+        return {"success": True, "storages": storages, "count": len(storages)}
+
+    except Exception as e:
+        logger.error(f"Failed to fetch storages: {e}")
+        return {"success": False, "error": str(e), "storages": []}
+
+
+@app.get("/managers")
+async def get_managers():
+    """
+    Get all active managers (users who have created orders).
+    Returns list of managers with ID and Name.
+    """
+    from sqlalchemy import text
+
+    try:
+        sql = """
+        SELECT DISTINCT
+            u.ID,
+            ISNULL(u.LastName + ' ' + u.FirstName, 'Manager ' + CAST(u.ID AS VARCHAR)) as Name
+        FROM dbo.[User] u
+        WHERE u.Deleted = 0
+          AND u.ID IN (
+              SELECT DISTINCT UserID
+              FROM dbo.[Order]
+              WHERE Deleted = 0 AND UserID IS NOT NULL
+          )
+        ORDER BY Name
+        """
+
+        with schema_extractor.engine.connect() as conn:
+            result = conn.execute(text(sql))
+            managers = [
+                {
+                    "id": row[0],
+                    "name": row[1]
+                }
+                for row in result.fetchall()
+            ]
+
+        return {"success": True, "managers": managers, "count": len(managers)}
+
+    except Exception as e:
+        logger.error(f"Failed to fetch managers: {e}")
+        return {"success": False, "error": str(e), "managers": []}
+
+
 if __name__ == "__main__":
     import uvicorn
 

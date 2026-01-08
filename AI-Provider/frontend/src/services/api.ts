@@ -1,9 +1,13 @@
 import type { ApiStatus, OllamaQueryResult } from '../types';
 
-// API Configuration
+// API Configuration - Port Reference:
+// - 8000: AI-Provider Backend (Text-to-SQL)
+// - 8001: Main API (Recommendations, Forecasts, Analytics)
+// - 8200: Dashboard WebSocket
+// - 3000: Frontend
 const SQL_API = import.meta.env.VITE_SQL_API || 'http://localhost:8000';
-const ANALYTICS_API = import.meta.env.VITE_ANALYTICS_API || SQL_API;
-const RECO_API = import.meta.env.VITE_RECO_API || 'http://localhost:8100';
+const ANALYTICS_API = import.meta.env.VITE_ANALYTICS_API || 'http://localhost:8001';
+const RECO_API = import.meta.env.VITE_RECO_API || 'http://localhost:8001';
 
 export interface YearlySalesRow {
   year: number;
@@ -374,4 +378,233 @@ export async function fetchProductsByIds(ids: Array<string | number>, signal?: A
     return payload.rows as Record<string, unknown>[];
   }
   return [];
+}
+
+
+// Client Payment Score types and API
+export interface MonthlyScoreData {
+  month: string;
+  score: number;
+}
+
+export interface ClientScoreData {
+  is_cold_start?: boolean;
+  overall_score: number;
+  score_grade: string;
+  paid_order_count: number;
+  avg_days_to_pay: number | null;
+  on_time_percentage: number;
+  paid_amount: number;
+  unpaid_order_count: number;
+  unpaid_amount: number;
+  oldest_unpaid_days: number | null;
+  paid_score_component: number;
+  unpaid_score_component: number;
+  monthly_scores: MonthlyScoreData[];
+}
+
+export interface ClientScoreResponse {
+  client_id: number;
+  client_name: string | null;
+  score: ClientScoreData;
+  latency_ms: number;
+  timestamp: string;
+}
+
+// Fetch client payment score
+export async function fetchClientScore(
+  clientId: string | number,
+  signal?: AbortSignal
+): Promise<ClientScoreResponse | null> {
+  const response = await fetch(`${RECO_API}/client-score/${clientId}`, { signal });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.detail || payload.error || 'Failed to load client payment score.');
+  }
+  return payload as ClientScoreResponse;
+}
+
+// Storage types and API
+export interface StorageItem {
+  id: number;
+  name: string;
+}
+
+export interface StoragesResponse {
+  success: boolean;
+  storages: StorageItem[];
+  count: number;
+  error?: string;
+}
+
+// Fetch all storages for the storage list panel
+export async function fetchStorages(
+  signal?: AbortSignal
+): Promise<StoragesResponse> {
+  const response = await fetch(`${SQL_API}/storages`, { signal });
+  const payload = await response.json().catch(() => ({ success: false, storages: [], count: 0 }));
+  return payload as StoragesResponse;
+}
+
+// Manager types and API
+export interface ManagerItem {
+  id: number;
+  name: string;
+}
+
+export interface ManagersResponse {
+  success: boolean;
+  managers: ManagerItem[];
+  count: number;
+  error?: string;
+}
+
+// Fetch all managers for the manager list panel
+export async function fetchManagers(
+  signal?: AbortSignal
+): Promise<ManagersResponse> {
+  const response = await fetch(`${SQL_API}/managers`, { signal });
+  const payload = await response.json().catch(() => ({ success: false, managers: [], count: 0 }));
+  return payload as ManagersResponse;
+}
+
+// Order Recommendations types and API
+export interface OrderRecommendationRequest {
+  as_of_date?: string;
+  manufacturing_days?: number;
+  logistics_days?: number;
+  warehouse_days?: number;
+  service_level?: number;
+  history_weeks?: number;
+  min_recommend_qty?: number;
+  product_ids?: number[];
+  supplier_id?: number;
+  max_products?: number;
+}
+
+export interface OrderRecommendationItem {
+  product_id: number;
+  product_name: string | null;
+  vendor_code: string | null;
+  on_hand: number;
+  inbound_open: number;
+  inventory_position: number;
+  avg_weekly_demand: number;
+  std_weekly_demand: number;
+  lead_time_weeks: number;
+  demand_during_lead_time: number;
+  safety_stock: number;
+  reorder_point: number;
+  recommended_qty: number;
+  expected_arrival_date: string;
+}
+
+export interface SupplierRecommendation {
+  supplier_id: number | null;
+  supplier_name: string | null;
+  total_recommended_qty: number;
+  products: OrderRecommendationItem[];
+}
+
+export interface OrderRecommendationResponse {
+  as_of_date: string;
+  manufacturing_days: number;
+  logistics_days: number;
+  warehouse_days: number;
+  lead_time_days: number;
+  service_level: number;
+  history_weeks: number;
+  recommendations: SupplierRecommendation[];
+  count: number;
+  latency_ms: number;
+  timestamp: string;
+}
+
+// Fetch order recommendations
+export async function fetchOrderRecommendations(
+  request: OrderRecommendationRequest,
+  signal?: AbortSignal
+): Promise<OrderRecommendationResponse> {
+  const response = await fetch(`${RECO_API}/order-recommendations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    signal,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.detail || payload.error || 'Failed to fetch order recommendations.');
+  }
+  return payload as OrderRecommendationResponse;
+}
+
+// Order Recommendations V2 types and API (with trend, seasonality, churn)
+export interface OrderRecommendationRequestV2 extends OrderRecommendationRequest {
+  use_trend_adjustment?: boolean;
+  use_seasonality?: boolean;
+  use_churn_adjustment?: boolean;
+  min_history_weeks?: number;
+}
+
+export interface OrderRecommendationItemV2 extends OrderRecommendationItem {
+  // Trend fields
+  trend_factor: number | null;
+  trend_direction: string | null; // 'growing' | 'declining' | 'stable'
+  // Seasonality fields
+  seasonal_index: number | null;
+  seasonal_period_weeks: number | null;
+  // Churn fields
+  churn_adjustment: number | null;
+  at_risk_demand_pct: number | null;
+  // Forecast metadata
+  forecast_method: string;
+  forecast_confidence: number | null;
+  data_weeks: number | null;
+}
+
+export interface SupplierRecommendationV2 {
+  supplier_id: number | null;
+  supplier_name: string | null;
+  total_recommended_qty: number;
+  products: OrderRecommendationItemV2[];
+}
+
+export interface OrderRecommendationResponseV2 {
+  as_of_date: string;
+  manufacturing_days: number;
+  logistics_days: number;
+  warehouse_days: number;
+  lead_time_days: number;
+  service_level: number;
+  history_weeks: number;
+  // V2 metadata
+  use_trend_adjustment: boolean;
+  use_seasonality: boolean;
+  use_churn_adjustment: boolean;
+  products_with_trend: number;
+  products_with_seasonality: number;
+  products_with_churn_risk: number;
+  // Results
+  recommendations: SupplierRecommendationV2[];
+  count: number;
+  latency_ms: number;
+  timestamp: string;
+}
+
+// Fetch order recommendations v2 (enhanced)
+export async function fetchOrderRecommendationsV2(
+  request: OrderRecommendationRequestV2,
+  signal?: AbortSignal
+): Promise<OrderRecommendationResponseV2> {
+  const response = await fetch(`${RECO_API}/order-recommendations/v2`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    signal,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.detail || payload.error || 'Failed to fetch order recommendations (v2).');
+  }
+  return payload as OrderRecommendationResponseV2;
 }

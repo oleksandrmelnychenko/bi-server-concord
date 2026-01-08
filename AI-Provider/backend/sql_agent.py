@@ -621,6 +621,8 @@ directly. Do NOT invent alternative paths if a template exists below.
         ]
         if any(p in q for p in defect_warehouse_patterns):
             hints.append("CRITICAL - DEFECT WAREHOUSE: 'склад браку' is a warehouse NAME (Storage.Name LIKE N'%БРАК%'), NOT 'shortage' or 'defect'! Use: JOIN dbo.Storage s ON pa.StorageID = s.ID WHERE s.Name LIKE N'%БРАК%'. Use ProductAvailability.Amount for current stock quantity.")
+        elif self._contains_any(q, ["відвантаж", "shipment", "dispatch"]):
+            hints.append("SHIPMENTS BY WAREHOUSE: Use dbo.Consignment table (NOT OrderItem!). Consignment has StorageID column. Query: SELECT s.Name, COUNT(c.ID) as ShipmentCount, SUM(c.TotalSum) as TotalSum FROM dbo.Consignment c JOIN dbo.Storage s ON c.StorageID = s.ID WHERE c.Deleted = 0 AND s.Deleted = 0 GROUP BY s.ID, s.Name ORDER BY ShipmentCount DESC")
         elif self._contains_any(q, storage_tokens):
             hints.append("STORAGE/WAREHOUSE QUERIES: Use dbo.Storage table. For inventory use dbo.ProductAvailability (Amount = current quantity). Join: ProductAvailability.StorageID = Storage.ID")
 
@@ -709,10 +711,19 @@ directly. Do NOT invent alternative paths if a template exists below.
         has_client_table = any("client" in t for t in tables)
         has_region_table = any("region" in t for t in tables)
 
+        # Check if SQL uses address-based filtering (valid alternative to Region table)
+        # Use regex to handle table aliases (e.g., c.LegalAddress LIKE)
+        sql_lower = sql.lower()
+        has_address_filter = bool(re.search(r'address\s+(like|=)', sql_lower)) or \
+                             bool(re.search(r'city\s+(like|=)', sql_lower))
+        logger.debug(f"[Address Filter Check] sql_lower contains 'address': {'address' in sql_lower}, has_address_filter={has_address_filter}")
+
         if self._contains_any(q, client_tokens) and not has_client_table:
             raise ValueError("Intent mismatch: client query without Client table")
-        if self._contains_any(q, region_tokens) and not has_region_table:
-            raise ValueError("Intent mismatch: region query without Region table")
+        # Allow region queries if they use Region table OR address-based filtering
+        if self._contains_any(q, region_tokens) and not has_region_table and not has_address_filter:
+            logger.warning(f"[Region Validation FAIL] region_tokens matched, has_region_table={has_region_table}, has_address_filter={has_address_filter}")
+            raise ValueError("Intent mismatch: region query without Region table or address filter")
 
         # Bank validation - банк, банки
         bank_tokens = [
@@ -1086,6 +1097,7 @@ RULES:
 - Use TOP N (not LIMIT)
 - Use dbo.[Order] with brackets
 - Add WHERE alias.Deleted = 0
+- ALWAYS use short aliases for every table in FROM/JOIN (e.g., FROM dbo.[User] u). Never use SQL keywords (WHERE, AND, OR) as aliases.
 - Order has NO ClientID! Use: Order.ClientAgreementID -> ClientAgreement.ClientID -> Client
 {intent_section}{join_section}
 {examples_section}
@@ -1105,13 +1117,13 @@ SQL:
         for pattern in patterns:
             matches = re.findall(pattern, llm_response, re.DOTALL | re.IGNORECASE)
             if matches:
-                return self._fix_sql_dialect(matches[0].strip().rstrip(";"))
+                return self._fix_sql_dialect(matches[0].strip().strip().rstrip(";").strip().rstrip("`").strip())
         # Try to find SELECT statement
         select_pattern = r"(SELECT\s+.*?)(?=\n\n|$)"
         matches = re.findall(select_pattern, llm_response, re.DOTALL | re.IGNORECASE)
         if matches:
-            return self._fix_sql_dialect(matches[0].strip().rstrip(";"))
-        return self._fix_sql_dialect(llm_response.strip().rstrip(";"))
+            return self._fix_sql_dialect(matches[0].strip().strip().rstrip(";").strip().rstrip("`").strip())
+        return self._fix_sql_dialect(llm_response.strip().strip().rstrip(";").strip().rstrip("`").strip())
 
     # Common column name hallucinations and their corrections
     COLUMN_FIXES = {
@@ -1163,13 +1175,22 @@ SQL:
 
     def _fix_sql_dialect(self, sql: str) -> str:
         """Fix PostgreSQL/MySQL syntax to T-SQL and correct hallucinated column names."""
+        # First strip whitespace so backtick patterns match reliably
+        sql = sql.strip()
+        # Clean up markdown backticks that LLM sometimes leaves in SQL
+        sql = re.sub(r'^```\s*sql\s*', '', sql, flags=re.IGNORECASE)  # ```sql at start
+        sql = re.sub(r'^```\s*', '', sql)  # ``` at start
+        sql = re.sub(r'```$', '', sql)  # ``` at end (after strip)
+        sql = sql.replace('```', '').strip()  # Any remaining and final cleanup
         # First, convert any Cyrillic region codes to Latin (e.g., 'Хм' -> 'XM')
         sql = self._fix_cyrillic_region_codes(sql)
-        # Fix duplicate WHERE keyword: "WHERE WHERE.Deleted" -> "WHERE Deleted"
+        # Fix duplicate WHERE keyword (robust to whitespace and dot variants)
         original = sql
-        sql = re.sub(r'\bWHERE\s+WHERE\.', 'WHERE ', sql, flags=re.IGNORECASE)
-        # Fix "AND WHERE.Deleted" -> "AND Deleted" (LLM sometimes uses WHERE as table alias)
-        sql = re.sub(r'\bAND\s+WHERE\.', 'AND ', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'\bWHERE\s+WHERE\s*\.\s*', 'WHERE ', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'\bAND\s+WHERE\s*\.\s*', 'AND ', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'\bWHERE\s+WHERE\s+', 'WHERE ', sql, flags=re.IGNORECASE)
+        # Fix "AND WHERE" -> "AND" (LLM sometimes uses WHERE as table alias)
+        sql = re.sub(r'\bAND\s+WHERE\s+', 'AND ', sql, flags=re.IGNORECASE)
         if 'WHERE.' in original:
             logger.debug(f"WHERE alias fix: '{original[:100]}' -> '{sql[:100]}'")
         # Convert ILIKE to LIKE (PostgreSQL -> T-SQL)
@@ -1195,6 +1216,9 @@ SQL:
             sql = re.sub(wrong_pattern, correct_name, sql, flags=re.IGNORECASE)
         # Fix ambiguous Deleted column (add table alias if missing)
         sql = self._fix_ambiguous_deleted(sql)
+        # Post-fix: Remove any WHERE. prefix that slipped through
+        sql = re.sub(r'\bWHERE\s+WHERE\.', 'WHERE ', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'\bAND\s+WHERE\.', 'AND ', sql, flags=re.IGNORECASE)
         # Fix incorrect ClientAgreement join patterns
         sql = self._fix_client_agreement_joins(sql)
         # Fix incorrect Order.ClientID join patterns (LLM hallucination)
@@ -1203,7 +1227,25 @@ SQL:
         sql = self._fix_region_column(sql)
         # Fix incorrect Debt.ClientID join patterns (LLM hallucination)
         sql = self._fix_debt_client_join(sql)
+
+        # FINAL: Remove any WHERE. alias prefix that may remain
+        import sys
+        if 'WHERE.' in sql:
+            print(f"DEBUG BEFORE FINAL: {sql[:200]}", file=sys.stderr)
+        sql = re.sub(r'\bWHERE\.([A-Za-z])', r'\1', sql, flags=re.IGNORECASE)
+        if 'WHERE.' in sql:
+            print(f"DEBUG AFTER FINAL STILL HAS WHERE.: {sql[:200]}", file=sys.stderr)
         return sql.strip()
+
+    # SQL keywords that should NOT be treated as table aliases
+    SQL_KEYWORDS = {
+        'where', 'and', 'or', 'on', 'join', 'left', 'right', 'inner', 'outer',
+        'full', 'cross', 'order', 'group', 'by', 'having', 'select', 'from',
+        'as', 'in', 'not', 'null', 'is', 'like', 'between', 'exists', 'case',
+        'when', 'then', 'else', 'end', 'distinct', 'top', 'set', 'update',
+        'delete', 'insert', 'into', 'values', 'union', 'all', 'asc', 'desc',
+        'limit', 'offset', 'with', 'over', 'partition', 'row', 'rows'
+    }
 
     def _fix_ambiguous_deleted(self, sql: str) -> str:
         """Fix unqualified 'Deleted' column references by inferring table alias.
@@ -1217,7 +1259,11 @@ SQL:
         # Find all table aliases used in the query
         # Handle both [dbo].[Table] and dbo.Table formats
         alias_pattern = r'(?:FROM|JOIN)\s+(?:\[?dbo\]?\.)?\[?(\w+)\]?\s+(?:AS\s+)?([a-zA-Z]\w*)\b'
-        aliases = re.findall(alias_pattern, sql, re.IGNORECASE)
+        all_matches = re.findall(alias_pattern, sql, re.IGNORECASE)
+
+        # Filter out SQL keywords from matched aliases
+        aliases = [(table, alias) for table, alias in all_matches
+                   if alias.lower() not in self.SQL_KEYWORDS]
 
         if not aliases:
             # No aliases defined - just return as-is, can't fix without knowing the table
